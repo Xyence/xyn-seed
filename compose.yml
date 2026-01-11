@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: xyn-postgres
+    environment:
+      POSTGRES_DB: xyn
+      POSTGRES_USER: xyn
+      POSTGRES_PASSWORD: xyn_dev_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U xyn"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: xyn-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: xyn-core
+    environment:
+      DATABASE_URL: postgresql://xyn:xyn_dev_password@postgres:5432/xyn
+      REDIS_URL: redis://redis:6379/0
+      ARTIFACT_STORE_PATH: /app/artifacts
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ENV_ID: local-dev
+      LOG_LEVEL: INFO
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts
+      - ./core:/app/core
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn core.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  postgres_data:

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(curl:*)",
+      "Bash(./xynctl status:*)",
+      "Bash(./xynctl help:*)",
+      "Bash(./xynctl start:*)",
+      "Bash(docker logs:*)",
+      "Bash(./xynctl stop:*)",
+      "Bash(docker ps:*)",
+      "Bash(tee:*)",
+      "Bash(docker exec:*)",
+      "Bash(docker restart:*)"
+    ]
+  }
+}

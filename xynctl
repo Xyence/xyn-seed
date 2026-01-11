@@ -1,0 +1,232 @@
+#!/usr/bin/env python3
+"""
+xynctl - Xyn Seed Bootstrap and Preflight Tool
+
+This tool validates the environment and starts the Xyn Seed platform.
+"""
+import os
+import sys
+import subprocess
+from pathlib import Path
+
+
+class Colors:
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    END = '\033[0m'
+
+
+def print_error(msg):
+    print(f"{Colors.RED}✗ {msg}{Colors.END}")
+
+
+def print_success(msg):
+    print(f"{Colors.GREEN}✓ {msg}{Colors.END}")
+
+
+def print_warning(msg):
+    print(f"{Colors.YELLOW}⚠ {msg}{Colors.END}")
+
+
+def print_info(msg):
+    print(f"{Colors.BLUE}ℹ {msg}{Colors.END}")
+
+
+def check_env_file():
+    """Check if .env file exists, if not create from template."""
+    env_file = Path(".env")
+    template_file = Path(".env.template")
+
+    if not env_file.exists():
+        if template_file.exists():
+            print_warning(".env file not found")
+            print_info("Creating .env from template...")
+            template_file.read_text()
+            env_file.write_text(template_file.read_text())
+            print_success("Created .env file from template")
+            print_warning("Please edit .env and add your API keys before starting")
+            return False
+        else:
+            print_error(".env.template not found!")
+            return False
+    return True
+
+
+def load_env():
+    """Load environment variables from .env file."""
+    env_file = Path(".env")
+    env_vars = {}
+
+    if env_file.exists():
+        for line in env_file.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                env_vars[key.strip()] = value.strip()
+
+    return env_vars
+
+
+def check_api_keys():
+    """Validate that at least one AI provider key is configured."""
+    env_vars = load_env()
+
+    openai_key = env_vars.get('OPENAI_API_KEY', '').strip()
+    anthropic_key = env_vars.get('ANTHROPIC_API_KEY', '').strip()
+
+    if not openai_key and not anthropic_key:
+        print_error("No AI provider keys configured!")
+        print_info("At least one of the following is required:")
+        print_info("  - OPENAI_API_KEY")
+        print_info("  - ANTHROPIC_API_KEY")
+        print_info("\nPlease edit .env and add your API key(s)")
+        return False
+
+    if openai_key:
+        print_success(f"OpenAI API key configured")
+    if anthropic_key:
+        print_success(f"Anthropic API key configured")
+
+    return True
+
+
+def check_docker():
+    """Check if Docker is available and running."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            print_error("Docker is not running or not accessible")
+            print_info("Please start Docker and try again")
+            return False
+        print_success("Docker is running")
+        return True
+    except FileNotFoundError:
+        print_error("Docker command not found")
+        print_info("Please install Docker: https://docs.docker.com/get-docker/")
+        return False
+
+
+def check_docker_compose():
+    """Check if Docker Compose is available."""
+    try:
+        result = subprocess.run(
+            ["docker", "compose", "version"],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+        if result.returncode != 0:
+            print_error("Docker Compose is not available")
+            return False
+        print_success("Docker Compose is available")
+        return True
+    except FileNotFoundError:
+        print_error("Docker Compose not found")
+        return False
+
+
+def create_artifacts_dir():
+    """Create artifacts directory if it doesn't exist."""
+    artifacts_dir = Path("artifacts")
+    if not artifacts_dir.exists():
+        artifacts_dir.mkdir(parents=True)
+        print_success("Created artifacts directory")
+    return True
+
+
+def preflight():
+    """Run all preflight checks."""
+    print_info("Running Xyn Seed preflight checks...\n")
+
+    checks = [
+        ("Environment file", check_env_file),
+        ("API keys", check_api_keys),
+        ("Docker", check_docker),
+        ("Docker Compose", check_docker_compose),
+        ("Artifacts directory", create_artifacts_dir),
+    ]
+
+    all_passed = True
+    for name, check_fn in checks:
+        if not check_fn():
+            all_passed = False
+
+    print()
+    if not all_passed:
+        print_error("Preflight checks failed!")
+        print_info("Please fix the issues above and try again")
+        return False
+
+    print_success("All preflight checks passed!")
+    return True
+
+
+def start():
+    """Start the Xyn Seed platform."""
+    print_info("\nStarting Xyn Seed platform...\n")
+
+    try:
+        subprocess.run(
+            ["docker", "compose", "up", "--build"],
+            check=True
+        )
+    except subprocess.CalledProcessError as e:
+        print_error(f"Failed to start platform: {e}")
+        return False
+    except KeyboardInterrupt:
+        print_info("\nShutting down...")
+        subprocess.run(["docker", "compose", "down"])
+        return True
+
+    return True
+
+
+def main():
+    """Main entry point."""
+    if len(sys.argv) > 1:
+        cmd = sys.argv[1]
+
+        if cmd == "preflight":
+            sys.exit(0 if preflight() else 1)
+        elif cmd == "start":
+            if preflight():
+                sys.exit(0 if start() else 1)
+            else:
+                sys.exit(1)
+        elif cmd == "stop":
+            print_info("Stopping Xyn Seed platform...")
+            subprocess.run(["docker", "compose", "down"])
+            sys.exit(0)
+        elif cmd == "logs":
+            subprocess.run(["docker", "compose", "logs", "-f"] + sys.argv[2:])
+            sys.exit(0)
+        elif cmd == "help":
+            print("Xyn Seed Control Tool (xynctl)")
+            print("\nUsage:")
+            print("  ./xynctl preflight    - Run preflight checks only")
+            print("  ./xynctl start        - Run preflight and start platform")
+            print("  ./xynctl stop         - Stop the platform")
+            print("  ./xynctl logs [svc]   - Show logs (optionally for specific service)")
+            print("  ./xynctl help         - Show this help")
+            sys.exit(0)
+        else:
+            print_error(f"Unknown command: {cmd}")
+            print_info("Run './xynctl help' for usage information")
+            sys.exit(1)
+    else:
+        # Default: preflight + start
+        if preflight():
+            start()
+        else:
+            sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

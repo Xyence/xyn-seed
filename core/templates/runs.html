@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block title %}Runs - Xyn Seed Core{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Runs</h2>
+    <p class="meta">Blueprint execution history</p>
+</div>
+
+<div style="display: flex; gap: 1rem; margin-bottom: 1.5rem;">
+    <a href="/ui/runs/new" class="btn btn-primary">+ New Run</a>
+</div>
+
+<div class="card">
+    {% if runs %}
+    <table>
+        <thead>
+            <tr>
+                <th>Created At</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Actor</th>
+                <th>Duration</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for run in runs %}
+            <tr>
+                <td class="meta">{{ run.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+                <td><strong>{{ run.name }}</strong></td>
+                <td>
+                    {% if run.status.value == 'completed' %}
+                    <span class="badge badge-success">{{ run.status.value }}</span>
+                    {% elif run.status.value == 'failed' %}
+                    <span class="badge badge-danger">{{ run.status.value }}</span>
+                    {% elif run.status.value == 'running' %}
+                    <span class="badge badge-info">{{ run.status.value }}</span>
+                    {% elif run.status.value == 'cancelled' %}
+                    <span class="badge badge-warning">{{ run.status.value }}</span>
+                    {% else %}
+                    <span class="badge badge-secondary">{{ run.status.value }}</span>
+                    {% endif %}
+                </td>
+                <td>{{ run.actor }}</td>
+                <td class="meta">
+                    {% if run.completed_at and run.started_at %}
+                    {{ ((run.completed_at - run.started_at).total_seconds()) | round(2) }}s
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="/ui/runs/{{ run.id }}" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.875rem;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No runs found</p>
+        <p><a href="/ui/runs/new" class="btn btn-primary">Create your first run</a></p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

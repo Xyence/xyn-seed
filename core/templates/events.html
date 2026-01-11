@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Events - Xyn Seed Core{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Event Console</h2>
+    <p class="meta">Real-time event stream and history</p>
+</div>
+
+<div class="filters">
+    <div class="form-group" style="margin-bottom: 0;">
+        <label for="event-name-filter">Filter by Event Type</label>
+        <select id="event-name-filter" onchange="window.location.href='/ui/events?event_name='+this.value">
+            <option value="">All Events</option>
+            {% for name in event_names %}
+            <option value="{{ name }}" {% if name == selected_event_name %}selected{% endif %}>{{ name }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    <div style="display: flex; gap: 0.5rem;">
+        <button class="btn btn-secondary" onclick="location.reload()">Refresh</button>
+    </div>
+</div>
+
+<div class="card">
+    {% if events %}
+    <table>
+        <thead>
+            <tr>
+                <th>Occurred At</th>
+                <th>Event Name</th>
+                <th>Actor</th>
+                <th>Resource</th>
+                <th>Run ID</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for event in events %}
+            <tr>
+                <td class="meta">{{ event.occurred_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</td>
+                <td><code>{{ event.event_name }}</code></td>
+                <td>{{ event.actor }}</td>
+                <td>
+                    {% if event.resource_type %}
+                    <span class="meta">{{ event.resource_type }}/{{ event.resource_id[:8] }}</span>
+                    {% else %}
+                    <span class="meta">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if event.run_id %}
+                    <a href="/ui/runs/{{ event.run_id }}">{{ event.run_id }}</a>
+                    {% else %}
+                    <span class="meta">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    <a href="/ui/events/{{ event.id }}" class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.875rem;">View</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No events found</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

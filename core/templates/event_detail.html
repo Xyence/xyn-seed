@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block title %}Event {{ event.id }} - Xyn Seed Core{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Event Detail</h2>
+    <p class="meta"><a href="/ui/events">← Back to Events</a></p>
+</div>
+
+<div class="card">
+    <h3>{{ event.event_name }}</h3>
+    <table style="margin-top: 1rem;">
+        <tr>
+            <th style="width: 200px;">Event ID</th>
+            <td><code>{{ event.id }}</code></td>
+        </tr>
+        <tr>
+            <th>Event Name</th>
+            <td><code>{{ event.event_name }}</code></td>
+        </tr>
+        <tr>
+            <th>Occurred At</th>
+            <td>{{ event.occurred_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</td>
+        </tr>
+        <tr>
+            <th>Actor</th>
+            <td>{{ event.actor }}</td>
+        </tr>
+        <tr>
+            <th>Correlation ID</th>
+            <td><code>{{ event.correlation_id or '-' }}</code></td>
+        </tr>
+        <tr>
+            <th>Environment</th>
+            <td>{{ event.env_id }}</td>
+        </tr>
+        {% if event.run_id %}
+        <tr>
+            <th>Run ID</th>
+            <td><a href="/ui/runs/{{ event.run_id }}">{{ event.run_id }}</a></td>
+        </tr>
+        {% endif %}
+        {% if event.resource_type %}
+        <tr>
+            <th>Resource</th>
+            <td>{{ event.resource_type }} / {{ event.resource_id }}</td>
+        </tr>
+        {% endif %}
+    </table>
+
+    {% if event.data %}
+    <h4 style="margin-top: 1.5rem;">Event Data</h4>
+    <pre>{{ event.data | tojson(indent=2) }}</pre>
+    {% endif %}
+</div>
+{% endblock %}

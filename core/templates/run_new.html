@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+
+{% block title %}New Run - Xyn Seed Core{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Create New Run</h2>
+    <p class="meta"><a href="/ui/runs">← Back to Runs</a></p>
+</div>
+
+<div class="card">
+    <form method="post" action="/ui/runs" onsubmit="return validateForm()">
+        <div class="form-group">
+            <label for="name">Run Name *</label>
+            <input type="text" id="name" name="name" placeholder="e.g., Demo Run" required>
+        </div>
+
+        <div class="form-group">
+            <label for="blueprint_ref">Blueprint Ref</label>
+            <input type="text" id="blueprint_ref" name="blueprint_ref" placeholder="core.pack.install@v1" value="">
+            <small class="meta">Which blueprint to execute</small>
+        </div>
+
+        <div style="margin-bottom: 1rem;">
+            <small class="meta">Quick picks:</small>
+            <div style="display: flex; gap: 0.5rem; margin-top: 0.25rem; flex-wrap: wrap;">
+                <button type="button" class="btn btn-secondary" style="font-size: 0.875rem; padding: 0.25rem 0.5rem;" onclick="setQuickPick('core.pack.install@v1', 'Install Core Pack', {package: 'core'})">Install Core Pack</button>
+                <button type="button" class="btn btn-secondary" style="font-size: 0.875rem; padding: 0.25rem 0.5rem;" onclick="setQuickPick('core.migration.run@v1', 'Run Migrations', {target: 'latest'})">Run Migrations</button>
+                <button type="button" class="btn btn-secondary" style="font-size: 0.875rem; padding: 0.25rem 0.5rem;" onclick="setQuickPick('core.domain.install@v1', 'Install Domain Pack', {domain: 'system'})">Install Domain Pack</button>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label for="inputs">Input Parameters (JSON)</label>
+            <textarea id="inputs" name="inputs" placeholder='{"key": "value"}'>{}</textarea>
+            <small class="meta">Enter valid JSON object or leave empty</small>
+            <div id="json-error" style="color: #dc3545; font-size: 0.875rem; margin-top: 0.25rem; display: none;"></div>
+        </div>
+
+        <div class="form-group">
+            <label>
+                <input type="checkbox" name="simulate_failure" value="true">
+                Simulate failure (for testing failure events)
+            </label>
+        </div>
+
+        <div style="display: flex; gap: 0.5rem; margin-top: 1.5rem;">
+            <button type="submit" class="btn btn-primary">Create & Execute Run</button>
+            <a href="/ui/runs" class="btn btn-secondary">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+function setQuickPick(blueprintRef, runName, inputs) {
+    document.getElementById('blueprint_ref').value = blueprintRef;
+    document.getElementById('name').value = runName;
+    document.getElementById('inputs').value = JSON.stringify(inputs, null, 2);
+    validateJSON();
+}
+
+function validateJSON() {
+    const inputsField = document.getElementById('inputs');
+    const errorDiv = document.getElementById('json-error');
+    const value = inputsField.value.trim();
+
+    if (!value || value === '{}') {
+        errorDiv.style.display = 'none';
+        return true;
+    }
+
+    try {
+        JSON.parse(value);
+        errorDiv.style.display = 'none';
+        inputsField.style.borderColor = '';
+        return true;
+    } catch (e) {
+        errorDiv.textContent = 'Invalid JSON: ' + e.message;
+        errorDiv.style.display = 'block';
+        inputsField.style.borderColor = '#dc3545';
+        return false;
+    }
+}
+
+function validateForm() {
+    return validateJSON();
+}
+
+// Validate on input change
+document.addEventListener('DOMContentLoaded', function() {
+    const inputsField = document.getElementById('inputs');
+    inputsField.addEventListener('input', validateJSON);
+});
+</script>
+
+<div class="card">
+    <h3>About Runs (v0.0)</h3>
+    <p>In v0.0, runs are simple demonstrations of the execution model. When you create a run:</p>
+    <ul style="margin-left: 1.5rem; margin-top: 0.5rem;">
+        <li>A run is created with the specified name and inputs</li>
+        <li>The run executes with 2 demo steps (Initialize → Process)</li>
+        <li>Events are emitted for each state change</li>
+        <li>You can view the run detail page to see steps and events</li>
+    </ul>
+    <p style="margin-top: 1rem; color: #6c757d; font-size: 0.875rem;">
+        Full blueprint compilation and execution will be implemented in v1.
+    </p>
+</div>
+{% endblock %}
