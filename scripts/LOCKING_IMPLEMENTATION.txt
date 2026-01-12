@@ -1,0 +1,135 @@
+Row Locking Implementation for Pack Installation
+=================================================
+
+Overview
+--------
+Implements SELECT FOR UPDATE locking during state transitions to prevent
+concurrent finalization conflicts. Follows the pattern: claim atomically,
+work without locks, lock briefly during state transitions.
+
+Key Principle
+-------------
+"Lock only during state transitions, not throughout the entire operation"
+
+Implementation Pattern
+---------------------
+
+1. CLAIM PHASE (Atomic, No Lock Held)
+   - Uses INSERT ... ON CONFLICT ... DO NOTHING
+   - Sets installed_by_run_id at claim time
+   - Returns RETURNING clause to avoid extra fetch
+   - If conflict: fetch existing and raise typed error based on status
+
+   Code: core/blueprints/pack_install.py:189-265
+
+2. WORK PHASE (No Locks)
+   - Execute system installation (create schema, tables)
+   - Apply migrations
+   - Long-running operations without holding locks
+   - Uses in-memory installation object (non-critical for concurrency)
+
+   Code: core/blueprints/pack_install.py:267-317
+
+3. FINALIZE PHASE (Short Transaction + SELECT FOR UPDATE)
+   - Re-load and lock the row with .with_for_update()
+   - Check invariants on FRESH locked row (never trust old ORM object)
+   - Verify ownership (installed_by_run_id == ctx.run_id)
+   - Verify status == INSTALLING
+   - Update to INSTALLED and commit
+   - Lock is released after commit
+
+   Code: core/blueprints/pack_install.py:319-390
+
+Critical Code Section
+--------------------
+```python
+with ctx.step("Finalize installation", kind="action_task") as step:
+    # CRITICAL: Re-load and lock the row for exclusive access
+    # Do NOT trust the old in-memory `installation` object
+    locked = (
+        ctx.db.query(models.PackInstallation)
+        .filter(models.PackInstallation.id == installation.id)
+        .with_for_update()  # Blocks concurrent finalizers
+        .one()
+    )
+
+    # Idempotency: if already installed, return current state
+    if locked.status == models.PackStatus.INSTALLED:
+        return current_state
+
+    # Safety: only the claiming run can finalize
+    if locked.installed_by_run_id != ctx.run_id:
+        raise PackInstallationConflictError(...)
+
+    # Verify status is INSTALLING
+    if locked.status != models.PackStatus.INSTALLING:
+        raise PackInstallationConflictError(...)
+
+    # Enforce invariants
+    if not locked.schema_name:
+        raise PackInstallationInvariantError(...)
+
+    # Transition to INSTALLED (mutate locked row)
+    locked.status = models.PackStatus.INSTALLED
+    locked.installed_version = pack.version
+    locked.migration_state = latest_migration_id or "init"
+    locked.installed_at = datetime.utcnow()
+    locked.error = None
+    locked.updated_at = datetime.utcnow()
+
+    ctx.db.commit()  # Lock is released here
+```
+
+Why This Pattern?
+-----------------
+1. INSERT already makes the row uniquely "yours" - no need to lock after claim
+2. Real race is around finalization/retries, not after insert
+3. Holding locks longer reduces throughput and increases deadlock risk
+4. Short locks during transitions are sufficient for safety
+
+Benefits
+--------
+- Prevents concurrent finalizers from corrupting state
+- Ensures all checks operate on fresh database state
+- Idempotent: safe to retry after crashes
+- No locks held during long-running work
+- High concurrency: minimal lock contention
+
+Database-Level Guarantees
+-------------------------
+CHECK constraint enforces invariants even if application code has bugs:
+
+```sql
+ALTER TABLE pack_installations
+ADD CONSTRAINT ck_pack_installations_installed_invariants
+CHECK (
+    status != 'INSTALLED' OR (
+        schema_name IS NOT NULL AND
+        installed_version IS NOT NULL AND
+        installed_at IS NOT NULL AND
+        installed_by_run_id IS NOT NULL
+    )
+);
+```
+
+This makes corruption impossible at the database level.
+
+Future Enhancements
+------------------
+1. Use NOWAIT or SKIP LOCKED for immediate feedback:
+   - with_for_update(nowait=True) → raise immediately if locked
+   - with_for_update(skip_locked=True) → returns no row if locked
+
+2. Add similar locking for other state transitions:
+   - Mark as FAILED (with error details)
+   - Retry/takeover from FAILED state
+   - Upgrade transitions (INSTALLING → UPGRADING → INSTALLED)
+
+Testing
+-------
+Run: scripts/test_row_locking.sh
+Verifies:
+- Finalize uses SELECT FOR UPDATE
+- Lock is released after commit
+- Idempotency works with fresh locked data
+- Run ownership is enforced

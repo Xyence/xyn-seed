@@ -1,7 +1,7 @@
 """SQLAlchemy database models for Xyn Seed v0.0"""
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, DateTime, JSON, ForeignKey, Text, Enum, BigInteger
+from sqlalchemy import Column, String, Integer, DateTime, JSON, ForeignKey, Text, Enum, BigInteger, Index, UniqueConstraint, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 import enum
@@ -11,7 +11,8 @@ from core.database import Base
 
 class RunStatus(str, enum.Enum):
     """Run execution status."""
-    CREATED = "created"
+    QUEUED = "queued"      # Waiting in queue for worker to claim
+    CREATED = "created"    # Legacy - being phased out
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
@@ -40,7 +41,7 @@ class Event(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     event_name = Column(String(255), nullable=False, index=True)
-    occurred_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    occurred_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, index=True)
     env_id = Column(String(255), nullable=False, default="local-dev")
     actor = Column(String(255), nullable=False, default="system")
     correlation_id = Column(String(255), nullable=True, index=True)
@@ -49,7 +50,7 @@ class Event(Base):
     resource_type = Column(String(255), nullable=True)
     resource_id = Column(String(255), nullable=True)
     data = Column(JSON, nullable=False, default=dict)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
 
     # Relationships
     run = relationship("Run", back_populates="events", foreign_keys=[run_id])
@@ -100,15 +101,31 @@ class Run(Base):
     name = Column(String(255), nullable=False)
     blueprint_id = Column(UUID(as_uuid=True), ForeignKey("blueprints.id"), nullable=True, index=True)
     event_id = Column(UUID(as_uuid=True), ForeignKey("events.id"), nullable=True)
-    status = Column(Enum(RunStatus), nullable=False, default=RunStatus.CREATED, index=True)
+    status = Column(Enum(RunStatus), nullable=False, default=RunStatus.QUEUED, index=True)
     actor = Column(String(255), nullable=False, default="system")
     correlation_id = Column(String(255), nullable=False, index=True)
     inputs = Column(JSON, nullable=False, default=dict)
     outputs = Column(JSON, nullable=True)
     error = Column(JSON, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+
+    # Queue and lease management
+    queued_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    locked_at = Column(DateTime(timezone=True), nullable=True)
+    locked_by = Column(String(255), nullable=True)  # Worker identifier
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # For crash recovery
+
+    # Scheduling and priority
+    run_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, index=True)  # When run becomes eligible
+    priority = Column(Integer, nullable=False, default=100, index=True)  # Lower = higher priority
+    attempt = Column(Integer, nullable=False, default=0)  # Retry count
+    max_attempts = Column(Integer, nullable=True)  # Optional retry limit
+
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    # DAG/Orchestration (Phase 2)
+    parent_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True, index=True)
 
     # Relationships
     blueprint = relationship("Blueprint", back_populates="runs")
@@ -116,6 +133,35 @@ class Run(Base):
     steps = relationship("Step", back_populates="run", cascade="all, delete-orphan")
     artifacts = relationship("Artifact", back_populates="run")
     events = relationship("Event", back_populates="run", foreign_keys=[Event.run_id])
+
+    # DAG relationships
+    parent = relationship("Run", remote_side=[id], foreign_keys=[parent_run_id])
+    edges_as_parent = relationship("RunEdge", back_populates="parent", foreign_keys="RunEdge.parent_run_id")
+    edges_as_child = relationship("RunEdge", back_populates="child", foreign_keys="RunEdge.child_run_id")
+
+
+class RunEdge(Base):
+    """RunEdge model - parent/child relationships for DAG execution."""
+    __tablename__ = "run_edges"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    parent_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    child_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    relation = Column(String(50), nullable=False, default="child")
+    child_key = Column(String(255), nullable=True)  # Idempotency key for resumable spawns
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+
+    # Relationships
+    parent = relationship("Run", back_populates="edges_as_parent", foreign_keys=[parent_run_id])
+    child = relationship("Run", back_populates="edges_as_child", foreign_keys=[child_run_id])
+
+    __table_args__ = (
+        # Prevent duplicate parent->child edges
+        UniqueConstraint('parent_run_id', 'child_run_id', name='uq_run_edges_parent_child'),
+        # Note: Partial unique index for idempotent spawns (parent_run_id, child_key WHERE child_key IS NOT NULL)
+        # is created directly in migration SQL (003_add_run_edges_for_dag.sql) since SQLAlchemy
+        # doesn't support dialect-agnostic partial unique constraints in ORM models
+    )
 
 
 class Step(Base):
@@ -132,9 +178,9 @@ class Step(Base):
     outputs = Column(JSON, nullable=True)
     error = Column(JSON, nullable=True)
     logs_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id"), nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
 
     # Relationships
     run = relationship("Run", back_populates="steps")
@@ -179,3 +225,85 @@ class Node(Base):
 
     # Self-referential relationship
     parent = relationship("Node", remote_side=[id], backref="children")
+
+
+class PackStatus(str, enum.Enum):
+    """Pack installation status."""
+    PENDING = "pending"  # Installation record created, not yet started
+    INSTALLING = "installing"
+    INSTALLED = "installed"
+    UPGRADING = "upgrading"
+    FAILED = "failed"
+    UNINSTALLING = "uninstalling"
+
+
+class Pack(Base):
+    """Pack registry - available packs."""
+    __tablename__ = "packs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    pack_ref = Column(String(255), nullable=False, unique=True)  # e.g., core.domain@v1
+    name = Column(String(255), nullable=False)
+    version = Column(String(50), nullable=False)
+    description = Column(Text, nullable=True)
+    schema_name = Column(String(255), nullable=True)  # Target schema if applicable
+    manifest = Column(JSON, nullable=False, default=dict)  # Full pack manifest
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship to installations
+    installations = relationship("PackInstallation", back_populates="pack")
+
+
+class PackInstallation(Base):
+    """Pack installation records - tracks installed packs per environment."""
+    __tablename__ = "pack_installations"
+    __table_args__ = (
+        # Unique constraint for atomic duplicate prevention
+        # Ensures (env_id, pack_ref) uniqueness at database level for safe concurrent operations
+        UniqueConstraint("env_id", "pack_ref", name="uq_pack_installations_env_pack"),
+
+        # Check constraint for schema_mode values
+        CheckConstraint(
+            "schema_mode IN ('per_pack', 'shared')",
+            name="ck_pack_installations_schema_mode"
+        ),
+
+        # Explicit indexes for query performance
+        Index("ix_pack_installations_pack_id", "pack_id"),
+        Index("ix_pack_installations_pack_ref", "pack_ref"),
+        Index("ix_pack_installations_env_id", "env_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    pack_id = Column(UUID(as_uuid=True), ForeignKey("packs.id"), nullable=False)
+    pack_ref = Column(String(255), nullable=False)  # Denormalized, server-derived from pack.pack_ref
+    env_id = Column(String(255), nullable=False, default="local-dev")
+    status = Column(Enum(PackStatus), nullable=False, default=PackStatus.PENDING)
+
+    # Schema configuration
+    schema_mode = Column(String(50), nullable=False, default="per_pack")  # shared / per_pack
+    schema_name = Column(String(255), nullable=True)  # Actual deployed schema
+
+    # Version and migration tracking
+    installed_version = Column(String(50), nullable=True)
+    migration_provider = Column(String(50), nullable=False, default="sql")  # sql, alembic, flyway
+    migration_state = Column(String(255), nullable=True)  # Latest applied migration ID (e.g., "20260111_1414_init")
+
+    # Installation metadata
+    installed_at = Column(DateTime, nullable=True)  # Required when status=INSTALLED
+    installed_by_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True)
+    updated_by_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True)  # Last upgrade/change run
+
+    # Error tracking
+    error = Column(JSON, nullable=True)  # Error details if status=FAILED
+    last_error_at = Column(DateTime, nullable=True)  # Timestamp of last error
+
+    # Timestamps
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    pack = relationship("Pack", back_populates="installations")
+    installed_by_run = relationship("Run", foreign_keys=[installed_by_run_id])
+    updated_by_run = relationship("Run", foreign_keys=[updated_by_run_id])

@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}Domain - Xyn Seed Core{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h2>Domain Console</h2>
+    <p class="meta">Sites and Customers from pack_core_domain schema</p>
+</div>
+
+<!-- Customers Section -->
+<div class="card">
+    <h3 style="margin-bottom: 1rem;">Customers</h3>
+
+    {% if customers %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th>Status</th>
+                <th>Created At</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for customer in customers %}
+            <tr>
+                <td><strong>{{ customer.name }}</strong></td>
+                <td>{{ customer.email }}</td>
+                <td>
+                    {% if customer.status == 'active' %}
+                    <span class="badge badge-success">{{ customer.status }}</span>
+                    {% else %}
+                    <span class="badge badge-secondary">{{ customer.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="meta">{{ customer.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No customers found</p>
+        <p class="meta">Use POST /api/v1/customers to create one</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- Sites Section -->
+<div class="card">
+    <h3 style="margin-bottom: 1rem;">Sites</h3>
+
+    {% if sites %}
+    <table>
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Customer</th>
+                <th>URL</th>
+                <th>Status</th>
+                <th>Created At</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for site in sites %}
+            <tr>
+                <td><strong>{{ site.name }}</strong></td>
+                <td>{{ site.customer_name or site.customer_id }}</td>
+                <td>
+                    {% if site.url %}
+                    <a href="{{ site.url }}" target="_blank">{{ site.url }}</a>
+                    {% else %}
+                    <span class="meta">-</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if site.status == 'active' %}
+                    <span class="badge badge-success">{{ site.status }}</span>
+                    {% else %}
+                    <span class="badge badge-secondary">{{ site.status }}</span>
+                    {% endif %}
+                </td>
+                <td class="meta">{{ site.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+        <p>No sites found</p>
+        <p class="meta">Use POST /api/v1/sites to create one</p>
+    </div>
+    {% endif %}
+</div>
+
+<!-- API Reference -->
+<div class="card">
+    <h3 style="margin-bottom: 1rem;">API Endpoints</h3>
+    <p><strong>Customers:</strong></p>
+    <ul style="margin-left: 1.5rem; margin-bottom: 1rem;">
+        <li><code>GET /api/v1/customers</code> - List all customers</li>
+        <li><code>POST /api/v1/customers</code> - Create a customer</li>
+    </ul>
+    <p><strong>Sites:</strong></p>
+    <ul style="margin-left: 1.5rem;">
+        <li><code>GET /api/v1/sites</code> - List all sites</li>
+        <li><code>POST /api/v1/sites</code> - Create a site</li>
+    </ul>
+</div>
+{% endblock %}

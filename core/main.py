@@ -9,8 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core import __version__
 from core.database import init_db
-from core.api import health, events, runs, artifacts, drafts
-from core.ui import ui_events, ui_runs, ui_artifacts
+from core.api import health, events, runs, artifacts, drafts, packs, debug, domain, ops
+from core.ui import ui_events, ui_runs, ui_artifacts, ui_domain
 from core.middleware import CorrelationIdMiddleware
 
 
@@ -44,6 +44,13 @@ async def lifespan(app: FastAPI):
     init_db()
     logger.info("Database initialized")
 
+    # Register blueprints
+    logger.info("Registering blueprints...")
+    from core.blueprints import pack_install, pack_upgrade, test_orchestrator, core_migrations_apply_v1  # noqa - Import to register blueprints
+    from core.blueprints.registry import list_blueprints
+    registered = list_blueprints()
+    logger.info(f"Registered {len(registered)} blueprints: {', '.join(registered)}")
+
     yield
 
     logger.info("Shutting down Xyn Seed Core")
@@ -75,11 +82,16 @@ app.include_router(events.router, prefix="/api/v1", tags=["Events"])
 app.include_router(runs.router, prefix="/api/v1", tags=["Runs"])
 app.include_router(artifacts.router, prefix="/api/v1", tags=["Artifacts"])
 app.include_router(drafts.router, prefix="/api/v1", tags=["Drafts"])
+app.include_router(packs.router, prefix="/api/v1", tags=["Packs"])
+app.include_router(debug.router, prefix="/api/v1", tags=["Debug"])
+app.include_router(domain.router, prefix="/api/v1", tags=["Domain"])
+app.include_router(ops.router, prefix="/api/v1", tags=["Operations"])
 
 # Include UI routers (server-rendered HTML)
 app.include_router(ui_events.router, prefix="/ui", tags=["UI - Events"])
 app.include_router(ui_runs.router, prefix="/ui", tags=["UI - Runs"])
 app.include_router(ui_artifacts.router, prefix="/ui", tags=["UI - Artifacts"])
+app.include_router(ui_domain.router, prefix="/ui", tags=["UI - Domain"])
 
 
 @app.get("/")
@@ -93,6 +105,20 @@ async def root():
 async def root_health():
     """Root health check (non-versioned for convenience)."""
     return {"status": "ok", "version": __version__}
+
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint.
+
+    Exposes runtime metrics collected by the metrics collector:
+    - Queue health (depth, ready/future, oldest waiting)
+    - Lease health (expired vs active leases)
+    """
+    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+    from fastapi import Response
+
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 if __name__ == "__main__":

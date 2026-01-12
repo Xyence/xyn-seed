@@ -255,3 +255,136 @@ class ErrorResponse(BaseModel):
     """Standard error response."""
     error: ErrorDetail
     correlation_id: Optional[str] = None
+
+
+# Pack Schemas
+class Pack(BaseModel):
+    """Pack response model."""
+    pack_id: UUID = Field(alias="id")
+    pack_ref: str
+    name: str
+    version: str
+    description: Optional[str] = None
+    schema_name: Optional[str] = None
+    manifest: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+    @classmethod
+    def from_orm_model(cls, pack):
+        """Convert ORM model to schema."""
+        return cls(
+            id=pack.id,
+            pack_ref=pack.pack_ref,
+            name=pack.name,
+            version=pack.version,
+            description=pack.description,
+            schema_name=pack.schema_name,
+            manifest=pack.manifest or {},
+            created_at=pack.created_at,
+            updated_at=pack.updated_at
+        )
+
+
+class PackInstallation(BaseModel):
+    """Pack installation response model."""
+    installation_id: UUID = Field(alias="id")
+    pack_id: UUID
+    pack_ref: str
+    env_id: str
+    status: str
+
+    # Schema configuration
+    schema_mode: str
+    schema_name: Optional[str] = None
+
+    # Version and migration tracking
+    installed_version: Optional[str] = None
+    migration_provider: str = "sql"
+    migration_state: Optional[str] = None
+
+    # Installation metadata
+    installed_at: Optional[datetime] = None
+    installed_by_run_id: Optional[UUID] = None
+    updated_by_run_id: Optional[UUID] = None
+
+    # Error tracking
+    error: Optional[Dict[str, Any]] = None
+    last_error_at: Optional[datetime] = None
+
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+        populate_by_name = True
+
+    @classmethod
+    def from_orm_model(cls, installation):
+        """Convert ORM model to schema."""
+        return cls(
+            id=installation.id,
+            pack_id=installation.pack_id,
+            pack_ref=installation.pack_ref,
+            env_id=installation.env_id,
+            status=installation.status.value if hasattr(installation.status, 'value') else installation.status,
+            schema_mode=installation.schema_mode,
+            schema_name=installation.schema_name,
+            installed_version=installation.installed_version,
+            migration_provider=installation.migration_provider,
+            migration_state=installation.migration_state,
+            installed_at=installation.installed_at,
+            installed_by_run_id=installation.installed_by_run_id,
+            updated_by_run_id=installation.updated_by_run_id,
+            error=installation.error,
+            last_error_at=installation.last_error_at,
+            created_at=installation.created_at,
+            updated_at=installation.updated_at
+        )
+
+
+class PackWithInstallation(BaseModel):
+    """Pack with installation status."""
+    pack: Pack
+    installation: Optional[PackInstallation] = None
+
+
+class PackListResponse(BaseModel):
+    """Pack list response."""
+    items: List[PackWithInstallation]
+    next_cursor: Optional[str] = None
+
+
+class PackInstallRequest(BaseModel):
+    """Pack install/upgrade request body."""
+    run_at: Optional[datetime] = Field(None, description="Schedule run for later (default: now)")
+    priority: int = Field(100, description="Priority (lower = higher priority). 0-9: critical, 10-49: high, 50-100: normal, 200+: background")
+    max_attempts: Optional[int] = Field(None, description="Maximum retry attempts (default: no retries)")
+
+
+class PackStatusResponse(BaseModel):
+    """Pack installation status response."""
+    pack_ref: str
+    status: str
+
+    # Schema configuration
+    schema_mode: Optional[str] = None
+    schema_name: Optional[str] = None
+
+    # Version and migration tracking
+    installed_version: Optional[str] = None
+    migration_provider: Optional[str] = None
+    migration_state: Optional[str] = None
+
+    # Installation metadata
+    installed_at: Optional[datetime] = None
+    installed_by_run_id: Optional[UUID] = None
+    updated_by_run_id: Optional[UUID] = None
+
+    # Error tracking
+    error: Optional[Dict[str, Any]] = None
+    last_error_at: Optional[datetime] = None
