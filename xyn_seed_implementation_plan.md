@@ -173,38 +173,53 @@ For Xyn Seed, the equivalent is a **toolchain kernel**: a small set of facilitie
 - **Node**: a deployed instance (seed or child).
 - **Draft**: a non-active working object (draft blueprint/pack) that can be edited/promoted.
 
-### 5.2 Minimal schema (conceptual)
-- events(id, type, source, payload, received_at)
-- blueprints(id, name, version, trigger, definition, created_at)
-- blueprint_drafts(id, name, trigger, definition, status, created_at)
-- runs(id, blueprint_id, event_id, status, started_at, finished_at)
-- steps(id, run_id, idx, kind, input, output, status, timestamps)
-- artifacts(id, run_id, step_id, type, uri_or_blob, metadata)
-- nodes(id, name, parent_id, version, status, created_at)
+\1
 
----
+### 5.3 Footprints & Impressions (v0 semantics)
 
-## 6. Execution pipeline (v0)
-### 5.1 Key entities
-- **Event**: immutable input record.
-- **Blueprint**: declarative workflow definition.
-- **Run**: an execution instance of a blueprint.
-- **Step**: an atomic unit in a run.
-- **Artifact**: a generated output (files, JSON, logs, reports).
-- **Node**: a deployed instance (seed or child).
+#### 5.3.1 Definitions
+- **Footprint** = measurable consumption emitted by the system.
+  - Examples:
+    - LLM usage: tokens_in/tokens_out, request_count, cache_hit
+    - Execution: wall_ms, cpu_ms, bytes_in/out
+    - Storage: artifact_bytes_written
+    - Optional: dollars_est (derived via pricing tables; can be best-effort)
+- **Impression** = a semantic label or summary derived from footprints and outcomes.
+  - Examples:
+    - severity=low/med/high
+    - customer_visible=true/false
+    - billable=true/false OR billing_tier=gold/silver/internal
+    - anomaly=true with basis pointing to footprint outliers
 
-### 5.2 Minimal schema (conceptual)
-- events(id, type, source, payload, received_at)
-- blueprints(id, name, version, trigger, definition, created_at)
-- runs(id, blueprint_id, event_id, status, started_at, finished_at)
-- steps(id, run_id, idx, kind, input, output, status, timestamps)
-- artifacts(id, run_id, step_id, type, uri_or_blob, metadata)
-- nodes(id, name, parent_id, version, status, created_at)
+#### 5.3.2 Required properties
+- Every Run MUST have at least one footprint:
+  - metric = "run.count", quantity=1, unit="count"
+- Every Step SHOULD emit at least:
+  - metric="step.count" (count=1)
+  - metric="wall_ms" for execution duration (best effort)
 
----
+#### 5.3.3 Cardinality rules (avoid runaway growth)
+- Prefer **one footprint row per (source_kind, source_ref, metric) per step** for v0.
+  - Example: an LLM call emits 2 rows max: tokens_in, tokens_out (plus optional wall_ms)
+- Only emit high-cardinality dimensions into `dims_json` when needed for policy/audit.
 
-## 6. Execution pipeline (v0)
-### 6.1 Core flow
+#### 5.3.4 Policy hooks
+- `class` is the stable policy-facing classifier:
+  - informational | internal | billable | free_tier | etc
+- Impressions are where “rating” logic lives:
+  - billable decisioning, risk scoring, customer-visible tagging, quality scoring, etc.
+
+#### 5.3.5 Storage and retention strategy (Postgres-first)
+- Store atomic footprints for a bounded window (e.g., 30–90 days), then:
+  - keep rollups indefinitely (or longer)
+  - optionally archive full-detail footprints to object storage (Parquet) later
+- Partition `footprints` and `impressions` by time (monthly) early to keep vacuum/indexes sane.
+- **Outbox-ready (future event log):**
+  - When writing events/runs/steps/footprints, also write an `outbox` row in the same transaction.
+  - A background dispatcher can publish outbox messages to a durable log later (Kafka/Redpanda/NATS JetStream/etc.).
+  - This preserves Postgres-first simplicity while keeping a clean migration path to a dedicated event log.
+
+\21 Core flow
 1) Event arrives
 2) System selects blueprint(s)
 3) Blueprint compiles to execution plan
@@ -213,20 +228,20 @@ For Xyn Seed, the equivalent is a **toolchain kernel**: a small set of facilitie
    - call agent
    - call action
    - create artifact
-6) Results + logs written to audit store
-7) UI shows events/runs/steps
+\1- persist artifacts
+- emit footprints for step execution + tool/agent usage
+- optionally emit impressions (or defer to later classifier pass)
+\3
 
-### 6.2 Step kinds
-- agent_task
-- action_task
-- gate (approval)
-- transform (pure function / mapping)
+\1
 
----
-
-## 7. Blueprint format v0
-
-### 7.1 Design goals
+### 6.3 Footprint capture points (v0)
+- On step start: optional (step.count)
+- On step finish: required (wall_ms + step.count)
+- On agent call completion: required (tokens_in/tokens_out + request_count + provider/model dims)
+- On action completion: required (wall_ms + optional bytes_in/out + action dims)
+- On artifact write: optional (artifact_bytes_written)
+\21 Design goals
 - Human-readable, agent-friendly
 - Declarative
 - Supports gating
@@ -1012,43 +1027,33 @@ Examples:
 ### 29.5 Core event catalog (sane defaults)
 This is the recommended initial catalog. Domains can add more, but these names should remain stable.
 
-#### 29.5.1 Runs & steps
-- `xyn.run.created`
-- `xyn.run.started`
-- `xyn.run.completed`
-- `xyn.run.failed`
-- `xyn.run.cancelled`
-- `xyn.step.started`
-- `xyn.step.completed`
-- `xyn.step.failed`
-
-#### 29.5.2 Artifacts
-- `xyn.artifact.created`
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
 - `xyn.artifact.attached` (artifact linked to run/step/draft)
 
-#### 29.5.3 Drafts, blueprints, packs
-- `xyn.draft.created`
-- `xyn.draft.updated`
-- `xyn.draft.validated`
-- `xyn.draft.validation_failed`
-- `xyn.draft.promoted`
-- `xyn.blueprint.registered`
-- `xyn.blueprint.updated`
-- `xyn.pack.registered`
-- `xyn.pack.updated`
-
-#### 29.5.4 AI-assisted authoring (optional early)
-- `xyn.ai.requested`
-- `xyn.ai.completed`
-- `xyn.ai.failed`
-
-#### 29.5.5 Git / code changes
-- `xyn.git.repo.created`
-- `xyn.git.commit.created`
-- `xyn.git.branch.created`
-- `xyn.git.merge.requested`
-- `xyn.git.merge.completed`
-
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
 #### 29.5.6 CI/CD (native)
 - `xyn.cicd.change.ready` (implementation complete; ready for test)
 - `xyn.cicd.workcell.created`
@@ -1066,43 +1071,31 @@ This is the recommended initial catalog. Domains can add more, but these names s
 - `xyn.cicd.deploy.completed`
 - `xyn.cicd.deploy.failed`
 
-#### 29.5.7 Infrastructure provisioning (cloud profile)
-- `xyn.infra.plan.requested`
-- `xyn.infra.apply.requested`
-- `xyn.infra.apply.completed`
-- `xyn.infra.apply.failed`
-- `xyn.infra.destroy.requested`
-- `xyn.infra.destroy.completed`
-- `xyn.infra.destroy.failed`
-
-#### 29.5.8 DNS & edge
-- `xyn.dns.zone.created`
-- `xyn.dns.record.upserted`
-- `xyn.dns.record.deleted`
-- `xyn.edge.config.applied`
-- `xyn.edge.cert.renewed`
-
-#### 29.5.9 Backups
-- `xyn.backup.started`
-- `xyn.backup.completed`
-- `xyn.backup.failed`
-- `xyn.restore.started`
-- `xyn.restore.completed`
-- `xyn.restore.failed`
-
-#### 29.5.10 Federation (future)
-- `xyn.federation.invite.created`
-- `xyn.federation.invite.accepted`
-- `xyn.federation.link.established`
-- `xyn.federation.policy.updated`
-
-#### 29.5.11 Identity (future)
-- `xyn.identity.principal.created`
-- `xyn.identity.principal.updated`
-- `xyn.identity.team.created`
-- `xyn.identity.team.updated`
-- `xyn.identity.role.assigned`
-
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
+\1
+#### 29.5.X Footprints & impressions
+- `xyn.footprint.recorded`
+- `xyn.impression.recorded`
+- `xyn.footprint.rollup.created` (optional; for batch rollups)
 ### 29.6 Pipeline as blueprints
 Model CI/CD steps as blueprints reacting to events:
 - `xyn.cicd.change.ready`
