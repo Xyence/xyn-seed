@@ -64,6 +64,7 @@ def test_release_plan_apply_status():
         assert apply_resp.status_code == 200
         operation = apply_resp.json()
         assert operation["status"] == "failed"
+        assert operation["artifacts"].get("notImplemented") == "k8s"
 
         op_resp = client.get(f"/api/v1/operations/{operation['operationId']}")
         assert op_resp.status_code == 200

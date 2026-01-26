@@ -216,6 +216,10 @@ async def apply_release(request: ApplyRequest, authorization: str | None = Heade
         message = f"backend '{backend_type}' apply not implemented"
 
     finished_at = store._now_iso()
+    artifacts = {}
+    if backend_type == "k8s":
+        artifacts = {"notImplemented": "k8s"}
+
     operation = {
         "operationId": operation_id,
         "releaseId": request.release_id,
@@ -226,7 +230,7 @@ async def apply_release(request: ApplyRequest, authorization: str | None = Heade
         "finishedAt": finished_at,
         "planId": request.plan_id,
         "message": message,
-        "artifacts": {}
+        "artifacts": artifacts
     }
 
     store.save_operation(request.release_id, operation_id, operation)
