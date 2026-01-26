@@ -6,7 +6,7 @@ import subprocess
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from jsonschema import validate, ValidationError
 from pydantic import BaseModel
 
@@ -17,6 +17,17 @@ from core.releases import store
 from core import schemas
 
 router = APIRouter()
+
+
+def _require_auth(authorization: str | None):
+    token = os.environ.get("SHINESEED_API_TOKEN", "").strip()
+    if not token:
+        return
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Missing authorization token")
+    expected = f"Bearer {token}"
+    if authorization.strip() != expected:
+        raise HTTPException(status_code=403, detail="Invalid authorization token")
 
 
 class PlanRequest(BaseModel):
@@ -99,7 +110,8 @@ def _diff_actions(
 
 
 @router.post("/releases/plan", response_model=schemas.ReleasePlan)
-async def plan_release(request: PlanRequest):
+async def plan_release(request: PlanRequest, authorization: str | None = Header(default=None)):
+    _require_auth(authorization)
     release_spec = request.release_spec
 
     try:
@@ -155,7 +167,8 @@ async def plan_release(request: PlanRequest):
 
 
 @router.post("/releases/apply", response_model=schemas.Operation)
-async def apply_release(request: ApplyRequest):
+async def apply_release(request: ApplyRequest, authorization: str | None = Header(default=None)):
+    _require_auth(authorization)
     plan = store.load_plan(request.release_id, request.plan_id)
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
@@ -221,7 +234,8 @@ async def apply_release(request: ApplyRequest):
 
 
 @router.get("/releases/{release_id}/status", response_model=schemas.ReleaseStatus)
-async def get_release_status(release_id: str):
+async def get_release_status(release_id: str, authorization: str | None = Header(default=None)):
+    _require_auth(authorization)
     runtime_spec = store.load_latest_runtime(release_id)
     if not runtime_spec:
         raise HTTPException(status_code=404, detail="Release not found")
@@ -297,7 +311,8 @@ async def get_release_status(release_id: str):
 
 
 @router.get("/operations/{operation_id}", response_model=schemas.Operation)
-async def get_operation(operation_id: str):
+async def get_operation(operation_id: str, authorization: str | None = Header(default=None)):
+    _require_auth(authorization)
     operation = store.find_operation(operation_id)
     if not operation:
         raise HTTPException(status_code=404, detail="Operation not found")

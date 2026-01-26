@@ -44,7 +44,11 @@ def test_release_plan_apply_status():
             ]
         }
 
-        plan_resp = client.post("/api/v1/releases/plan", json={"release_spec": release_spec})
+        os.environ["SHINESEED_API_TOKEN"] = ""
+        plan_resp = client.post(
+            "/api/v1/releases/plan",
+            json={"release_spec": release_spec}
+        )
         assert plan_resp.status_code == 200
         plan = plan_resp.json()
         assert plan["releaseId"] == "core.runner"
@@ -73,6 +77,52 @@ def test_release_plan_apply_status():
         assert status["observed"]["backend"] == "k8s"
 
 
+def test_release_auth_required():
+    app = FastAPI()
+    app.include_router(releases.router, prefix="/api/v1")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        os.environ["SHINESEED_WORKSPACE"] = str(Path(tmpdir))
+        os.environ["SHINESEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
+        os.environ["SHINESEED_API_TOKEN"] = "secret-token"
+
+        client = TestClient(app)
+        release_spec = {
+            "apiVersion": "xyn.shineseed/v1",
+            "kind": "Release",
+            "metadata": {
+                "name": "runner",
+                "namespace": "core",
+                "labels": {"owner": "shineseed"}
+            },
+            "backend": {"type": "k8s"},
+            "components": [
+                {
+                    "name": "runner-api",
+                    "image": "xyence/runner-api:dev"
+                }
+            ]
+        }
+
+        plan_resp = client.post("/api/v1/releases/plan", json={"release_spec": release_spec})
+        assert plan_resp.status_code == 401
+
+        plan_resp = client.post(
+            "/api/v1/releases/plan",
+            headers={"Authorization": "Bearer secret-token"},
+            json={"release_spec": release_spec}
+        )
+        assert plan_resp.status_code == 200
+
+        bad_resp = client.post(
+            "/api/v1/releases/plan",
+            headers={"Authorization": "Bearer wrong"},
+            json={"release_spec": release_spec}
+        )
+        assert bad_resp.status_code == 403
+
+
 if __name__ == "__main__":
     test_release_plan_apply_status()
+    test_release_auth_required()
     print("ok - test_releases_api")

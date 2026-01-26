@@ -40,6 +40,9 @@ def test_release_integration_compose():
 
         client = TestClient(app)
 
+        token = "secret-token"
+        os.environ["SHINESEED_API_TOKEN"] = token
+
         release_spec = {
             "apiVersion": "xyn.shineseed/v1",
             "kind": "Release",
@@ -60,13 +63,18 @@ def test_release_integration_compose():
             ]
         }
 
-        plan_resp = client.post("/api/v1/releases/plan", json={"release_spec": release_spec})
+        plan_resp = client.post(
+            "/api/v1/releases/plan",
+            json={"release_spec": release_spec},
+            headers={"Authorization": f"Bearer {token}"}
+        )
         assert plan_resp.status_code == 200
         plan = plan_resp.json()
 
         apply_resp = client.post(
             "/api/v1/releases/apply",
-            json={"release_id": plan["releaseId"], "plan_id": plan["planId"]}
+            json={"release_id": plan["releaseId"], "plan_id": plan["planId"]},
+            headers={"Authorization": f"Bearer {token}"}
         )
         assert apply_resp.status_code == 200
         operation = apply_resp.json()
@@ -74,7 +82,10 @@ def test_release_integration_compose():
 
         status = None
         for _ in range(6):
-            status_resp = client.get("/api/v1/releases/core.integration/status")
+            status_resp = client.get(
+                "/api/v1/releases/core.integration/status",
+                headers={"Authorization": f"Bearer {token}"}
+            )
             assert status_resp.status_code == 200
             status = status_resp.json()
             if status["services"]:
