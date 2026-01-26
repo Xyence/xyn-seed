@@ -1,4 +1,5 @@
 """Xyn Seed Core Service - Main FastAPI Application"""
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -51,7 +52,21 @@ async def lifespan(app: FastAPI):
     registered = list_blueprints()
     logger.info(f"Registered {len(registered)} blueprints: {', '.join(registered)}")
 
+    reconciler_task = None
+    try:
+        from core.releases.reconciler import reconcile_loop
+        reconciler_task = asyncio.create_task(reconcile_loop())
+    except Exception as exc:
+        logger.warning(f"Failed to start reconciler loop: {exc}")
+
     yield
+
+    if reconciler_task:
+        reconciler_task.cancel()
+        try:
+            await reconciler_task
+        except Exception:
+            pass
 
     logger.info("Shutting down Xyn Seed Core")
 

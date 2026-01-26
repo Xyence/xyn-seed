@@ -1,6 +1,7 @@
 """Release plan/apply/status endpoints."""
 from __future__ import annotations
 
+import os
 import subprocess
 import uuid
 from typing import Any, Dict, List, Optional
@@ -175,12 +176,15 @@ async def apply_release(request: ApplyRequest):
             message = "composeYamlPath missing from plan"
         else:
             compose_path = store.load_compose_path(compose_path_rel)
+            project_name = f"{runtime_spec['metadata']['namespace']}_{runtime_spec['metadata']['name']}"
+            env = {"COMPOSE_PROJECT_NAME": project_name, **dict(os.environ)}
             result = subprocess.run(
                 ["docker", "compose", "-f", str(compose_path), "up", "-d"],
                 capture_output=True,
                 text=True,
                 check=False,
-                cwd=str(compose_path.parent)
+                cwd=str(compose_path.parent),
+                env=env
             )
             if result.returncode != 0:
                 status = "failed"
@@ -230,22 +234,27 @@ async def get_release_status(release_id: str):
                 compose_path = candidate
 
         if compose_path:
+            project_name = f"{runtime_spec['metadata']['namespace']}_{runtime_spec['metadata']['name']}"
+            env = {"COMPOSE_PROJECT_NAME": project_name, **dict(os.environ)}
             result = subprocess.run(
                 ["docker", "compose", "-f", str(compose_path), "ps", "--format", "json"],
                 capture_output=True,
                 text=True,
                 check=False,
-                cwd=str(compose_path.parent)
+                cwd=str(compose_path.parent),
+                env=env
             )
             if result.returncode == 0 and result.stdout.strip():
                 import json
                 try:
                     payload = json.loads(result.stdout)
                     for entry in payload:
+                        state = entry.get("State") or "unknown"
+                        health = entry.get("Health") or "unknown"
                         services.append({
                             "name": entry.get("Service", "unknown"),
-                            "state": "running" if entry.get("State") == "running" else "stopped",
-                            "health": entry.get("Health", "unknown"),
+                            "state": "running" if state == "running" else "stopped",
+                            "health": health,
                             "details": entry
                         })
                 except json.JSONDecodeError:
@@ -267,3 +276,11 @@ async def get_release_status(release_id: str):
         },
         "services": services
     }
+
+
+@router.get("/operations/{operation_id}", response_model=schemas.Operation)
+async def get_operation(operation_id: str):
+    operation = store.find_operation(operation_id)
+    if not operation:
+        raise HTTPException(status_code=404, detail="Operation not found")
+    return operation

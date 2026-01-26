@@ -73,6 +73,7 @@ def test_render_compose_uses_published_port():
         "    labels:\n"
         "      owner: shineseed\n"
         "      release_id: core.runner\n"
+        "      revision: 1\n"
         "      service: runner-api\n"
         "\n"
         "volumes:\n"

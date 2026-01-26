@@ -66,6 +66,7 @@ def render_compose(runtime_spec: Dict[str, Any]) -> str:
         labels = {
             **metadata.get("labels", {}),
             "release_id": release_id,
+            "revision": runtime_spec["release"]["revision"],
             "service": service_name,
         }
         if labels:

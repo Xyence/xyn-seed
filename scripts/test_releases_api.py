@@ -60,6 +60,11 @@ def test_release_plan_apply_status():
         operation = apply_resp.json()
         assert operation["status"] == "failed"
 
+        op_resp = client.get(f"/api/v1/operations/{operation['operationId']}")
+        assert op_resp.status_code == 200
+        op_payload = op_resp.json()
+        assert op_payload["operationId"] == operation["operationId"]
+
         status_resp = client.get("/api/v1/releases/core.runner/status")
         assert status_resp.status_code == 200
         status = status_resp.json()

@@ -44,6 +44,13 @@ def release_operations_dir(release_id: str) -> Path:
     return _ensure_dir(_release_root(release_id) / "operations")
 
 
+def list_release_ids() -> list[str]:
+    releases_root = _workspace_root() / "releases"
+    if not releases_root.exists():
+        return []
+    return sorted([path.name for path in releases_root.iterdir() if path.is_dir()])
+
+
 def _now_iso() -> str:
     return datetime.utcnow().isoformat() + "Z"
 
@@ -133,11 +140,41 @@ def load_runtime_revision(release_id: str, revision: int) -> Optional[Dict[str, 
     return read_json(runtime_path)
 
 
+def latest_compose_path(release_id: str) -> Optional[Path]:
+    revision = latest_revision(release_id)
+    if revision is None:
+        return None
+    candidate = release_revisions_dir(release_id) / str(revision) / "compose.yaml"
+    if candidate.exists():
+        return candidate
+    return None
+
+
 def load_plan(release_id: str, plan_id: str) -> Optional[Dict[str, Any]]:
     plan_path = release_plans_dir(release_id) / f"{plan_id}.json"
     if not plan_path.exists():
         return None
     return read_json(plan_path)
+
+
+def load_operation(release_id: str, operation_id: str) -> Optional[Dict[str, Any]]:
+    operation_path = release_operations_dir(release_id) / f"{operation_id}.json"
+    if not operation_path.exists():
+        return None
+    return read_json(operation_path)
+
+
+def find_operation(operation_id: str) -> Optional[Dict[str, Any]]:
+    releases_root = _workspace_root() / "releases"
+    if not releases_root.exists():
+        return None
+    for release_dir in releases_root.iterdir():
+        if not release_dir.is_dir():
+            continue
+        operation_path = release_dir / "operations" / f"{operation_id}.json"
+        if operation_path.exists():
+            return read_json(operation_path)
+    return None
 
 
 def load_runtime_by_path(relative_path: str) -> Optional[Dict[str, Any]]:
@@ -159,6 +196,10 @@ __all__ = [
     "load_plan",
     "load_runtime_by_path",
     "load_compose_path",
+    "load_operation",
+    "find_operation",
+    "list_release_ids",
+    "latest_compose_path",
     "save_plan",
     "save_revision_artifacts",
     "save_operation",
