@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 from core.releases.compiler import compile_release_to_runtime
 from core.releases.compose_renderer import render_compose
+from core.releases.k8s_backend import validate_runtime_spec, K8sValidationError
 from core.releases import store
 from core import schemas
 
@@ -121,6 +122,11 @@ async def plan_release(request: PlanRequest):
     backend_type = runtime_spec["release"]["backend"]["type"]
     if backend_type == "compose":
         compose_yaml = render_compose(runtime_spec)
+    elif backend_type == "k8s":
+        try:
+            validate_runtime_spec(runtime_spec)
+        except K8sValidationError as exc:
+            raise HTTPException(status_code=400, detail=f"K8s validation error: {exc}")
 
     artifacts = store.save_revision_artifacts(
         release_id,

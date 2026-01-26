@@ -50,6 +50,7 @@ def test_release_plan_apply_status():
         assert plan["releaseId"] == "core.runner"
         assert plan["revisionTo"] == 1
         assert "runtimeSpecPath" in plan["artifacts"]
+        assert not plan["artifacts"].get("composeYamlPath")
         assert plan["actions"]
 
         apply_resp = client.post(
