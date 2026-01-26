@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core import __version__
 from core.database import init_db
-from core.api import health, events, runs, artifacts, drafts, packs, debug, domain, ops
+from core.api import health, events, runs, artifacts, drafts, packs, debug, domain, ops, releases
 from core.ui import ui_events, ui_runs, ui_artifacts, ui_domain
 from core.middleware import CorrelationIdMiddleware
 
@@ -86,6 +86,7 @@ app.include_router(packs.router, prefix="/api/v1", tags=["Packs"])
 app.include_router(debug.router, prefix="/api/v1", tags=["Debug"])
 app.include_router(domain.router, prefix="/api/v1", tags=["Domain"])
 app.include_router(ops.router, prefix="/api/v1", tags=["Operations"])
+app.include_router(releases.router, prefix="/api/v1", tags=["Releases"])
 
 # Include UI routers (server-rendered HTML)
 app.include_router(ui_events.router, prefix="/ui", tags=["UI - Events"])

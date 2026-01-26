@@ -388,3 +388,65 @@ class PackStatusResponse(BaseModel):
     # Error tracking
     error: Optional[Dict[str, Any]] = None
     last_error_at: Optional[datetime] = None
+
+
+# Release Schemas (contracts-aligned)
+class ReleasePlanAction(BaseModel):
+    op: str
+    targetType: str
+    targetName: str
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReleasePlanArtifacts(BaseModel):
+    runtimeSpecPath: Optional[str] = None
+    backendPlanPath: Optional[str] = None
+    composeYamlPath: Optional[str] = None
+    diffPath: Optional[str] = None
+    releaseSpecPath: Optional[str] = None
+
+    class Config:
+        extra = "allow"
+
+
+class ReleasePlan(BaseModel):
+    planId: str
+    releaseId: str
+    revisionFrom: Optional[int] = None
+    revisionTo: int
+    summary: str
+    actions: List[ReleasePlanAction]
+    artifacts: ReleasePlanArtifacts
+
+
+class ReleaseObservedStatus(BaseModel):
+    timestamp: datetime
+    backend: Optional[str] = None
+    message: Optional[str] = None
+
+
+class ReleaseServiceStatus(BaseModel):
+    name: str
+    state: str
+    health: str = "unknown"
+    details: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReleaseStatus(BaseModel):
+    releaseId: str
+    desiredRevision: int
+    observed: ReleaseObservedStatus
+    services: List[ReleaseServiceStatus]
+
+
+class Operation(BaseModel):
+    operationId: str
+    releaseId: str
+    type: str
+    status: str
+    createdAt: datetime
+    startedAt: Optional[datetime] = None
+    finishedAt: Optional[datetime] = None
+    planId: Optional[str] = None
+    message: str = ""
+    artifacts: Dict[str, str] = Field(default_factory=dict)
