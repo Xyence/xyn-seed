@@ -301,6 +301,15 @@ async def get_release_status(release_id: str, authorization: str | None = Header
             message = "compose.yaml not found for latest revision"
     else:
         message = f"backend '{backend_type}' status not implemented"
+        services = [
+            {
+                "name": service.get("name", "unknown"),
+                "state": "unknown",
+                "health": "unknown",
+                "details": {}
+            }
+            for service in runtime_spec.get("services", [])
+        ]
 
     return {
         "releaseId": release_id,
