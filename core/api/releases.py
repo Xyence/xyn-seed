@@ -248,7 +248,19 @@ async def get_release_status(release_id: str):
                 import json
                 try:
                     payload = json.loads(result.stdout)
-                    for entry in payload:
+                    if isinstance(payload, dict):
+                        entries = [payload]
+                    elif isinstance(payload, list):
+                        entries = payload
+                    else:
+                        entries = []
+                    if not entries:
+                        entries = [
+                            json.loads(line)
+                            for line in result.stdout.splitlines()
+                            if line.strip()
+                        ]
+                    for entry in entries:
                         state = entry.get("State") or "unknown"
                         health = entry.get("Health") or "unknown"
                         services.append({
