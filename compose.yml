@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -9,7 +7,7 @@ services:
       POSTGRES_USER: xyn
       POSTGRES_PASSWORD: xyn_dev_password
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -22,7 +20,7 @@ services:
     image: redis:7-alpine
     container_name: xyn-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -43,7 +41,7 @@ services:
       ENV_ID: local-dev
       LOG_LEVEL: INFO
     ports:
-      - "8000:8000"
+      - "8001:8000"
     volumes:
       - ./artifacts:/app/artifacts
       - ./core:/app/core
