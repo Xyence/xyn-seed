@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os
 import subprocess
+import shutil
 import time
 import uuid
 from typing import Dict, Optional
@@ -34,8 +35,9 @@ def _compose_project_name(runtime_spec: dict) -> str:
 
 def _compose_ps(compose_path, runtime_spec) -> Optional[list[dict]]:
     env = {"COMPOSE_PROJECT_NAME": _compose_project_name(runtime_spec), **dict(os.environ)}
+    compose_cmd = ["docker-compose"] if shutil.which("docker-compose") else ["docker", "compose"]
     result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "ps", "--format", "json"],
+        [*compose_cmd, "-f", str(compose_path), "ps", "--format", "json"],
         capture_output=True,
         text=True,
         check=False,
@@ -53,8 +55,9 @@ def _compose_ps(compose_path, runtime_spec) -> Optional[list[dict]]:
 
 def _compose_up(compose_path, runtime_spec) -> tuple[bool, str]:
     env = {"COMPOSE_PROJECT_NAME": _compose_project_name(runtime_spec), **dict(os.environ)}
+    compose_cmd = ["docker-compose"] if shutil.which("docker-compose") else ["docker", "compose"]
     result = subprocess.run(
-        ["docker", "compose", "-f", str(compose_path), "up", "-d"],
+        [*compose_cmd, "-f", str(compose_path), "up", "-d"],
         capture_output=True,
         text=True,
         check=False,

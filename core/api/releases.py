@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import uuid
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,15 @@ from core.releases import store
 from core import schemas
 
 router = APIRouter()
+
+
+def _compose_base_cmd() -> list[str]:
+    override = os.environ.get("XYN_SEED_COMPOSE_BIN", "").strip()
+    if override:
+        return override.split()
+    if shutil.which("docker-compose"):
+        return ["docker-compose"]
+    return ["docker", "compose"]
 
 
 def _require_auth(authorization: str | None):
@@ -197,8 +207,9 @@ async def apply_release(request: ApplyRequest, authorization: str | None = Heade
             compose_path = store.load_compose_path(compose_path_rel)
             project_name = f"{runtime_spec['metadata']['namespace']}_{runtime_spec['metadata']['name']}"
             env = {"COMPOSE_PROJECT_NAME": project_name, **dict(os.environ)}
+            compose_cmd = _compose_base_cmd()
             result = subprocess.run(
-                ["docker", "compose", "-f", str(compose_path), "up", "-d"],
+                [*compose_cmd, "-f", str(compose_path), "up", "-d"],
                 capture_output=True,
                 text=True,
                 check=False,
@@ -260,8 +271,9 @@ async def get_release_status(release_id: str, authorization: str | None = Header
         if compose_path:
             project_name = f"{runtime_spec['metadata']['namespace']}_{runtime_spec['metadata']['name']}"
             env = {"COMPOSE_PROJECT_NAME": project_name, **dict(os.environ)}
+            compose_cmd = _compose_base_cmd()
             result = subprocess.run(
-                ["docker", "compose", "-f", str(compose_path), "ps", "--format", "json"],
+                [*compose_cmd, "-f", str(compose_path), "ps", "--format", "json"],
                 capture_output=True,
                 text=True,
                 check=False,
