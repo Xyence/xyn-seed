@@ -417,6 +417,8 @@ class ReleasePlan(BaseModel):
     summary: str
     actions: List[ReleasePlanAction]
     artifacts: ReleasePlanArtifacts
+    actionKind: Optional[str] = None
+    options: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ReleaseObservedStatus(BaseModel):
@@ -437,6 +439,26 @@ class ReleaseStatus(BaseModel):
     desiredRevision: int
     observed: ReleaseObservedStatus
     services: List[ReleaseServiceStatus]
+
+
+class ReleaseSummary(BaseModel):
+    releaseId: str
+    name: str
+    namespace: str
+    desiredRevision: Optional[int] = None
+    backend: Optional[str] = None
+    updatedAt: datetime
+
+
+class ReleaseDetails(BaseModel):
+    releaseId: str
+    name: str
+    namespace: str
+    revision: int
+    backend: Optional[str] = None
+    updatedAt: datetime
+    releaseSpec: Dict[str, Any]
+    artifacts: Dict[str, str]
 
 
 class Operation(BaseModel):

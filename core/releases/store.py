@@ -7,9 +7,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+import uuid
+
 
 def _workspace_root() -> Path:
-    env_path = os.getenv("SHINESEED_WORKSPACE")
+    env_path = os.getenv("XYNSEED_WORKSPACE")
     if env_path:
         return Path(env_path)
     repo_root = Path(__file__).resolve().parents[3]
@@ -17,10 +19,14 @@ def _workspace_root() -> Path:
 
 
 def contracts_root() -> Path:
-    env_path = os.getenv("SHINESEED_CONTRACTS_ROOT")
+    env_path = os.getenv("XYNSEED_CONTRACTS_ROOT")
     if env_path:
         return Path(env_path)
     return Path(__file__).resolve().parents[3] / "xyn-contracts"
+
+
+def artifacts_root() -> Path:
+    return _ensure_dir(_workspace_root() / "artifacts")
 
 
 def _ensure_dir(path: Path) -> Path:
@@ -74,6 +80,26 @@ def write_json(path: Path, payload: Dict[str, Any]) -> None:
 
 def write_text(path: Path, payload: str) -> None:
     path.write_text(payload)
+
+
+def _safe_artifact_name(artifact_id: str) -> str:
+    if artifact_id != Path(artifact_id).name or ".." in artifact_id:
+        raise ValueError("Invalid artifact id")
+    return artifact_id
+
+
+def save_text_artifact(payload: str, suffix: str = ".log") -> str:
+    artifact_id = f"{uuid.uuid4()}{suffix}"
+    path = artifacts_root() / _safe_artifact_name(artifact_id)
+    write_text(path, payload)
+    return artifact_id
+
+
+def load_artifact_text(artifact_id: str) -> Optional[str]:
+    path = artifacts_root() / _safe_artifact_name(artifact_id)
+    if not path.exists():
+        return None
+    return path.read_text()
 
 
 def save_revision_artifacts(
@@ -188,16 +214,128 @@ def load_compose_path(relative_path: str) -> Path:
     return _workspace_root() / relative_path
 
 
+def load_artifact_by_path(relative_path: str) -> Optional[str]:
+    path = _workspace_root() / relative_path
+    if not path.exists():
+        return None
+    return path.read_text()
+
+
+def load_release_spec_revision(release_id: str, revision: int) -> Optional[Dict[str, Any]]:
+    release_path = release_revisions_dir(release_id) / str(revision) / "release.json"
+    if not release_path.exists():
+        return None
+    return read_json(release_path)
+
+
+def load_latest_release_spec(release_id: str) -> Optional[Dict[str, Any]]:
+    revision = latest_revision(release_id)
+    if revision is None:
+        return None
+    return load_release_spec_revision(release_id, revision)
+
+
+def latest_artifacts(release_id: str) -> Optional[Dict[str, str]]:
+    revision = latest_revision(release_id)
+    if revision is None:
+        return None
+    revision_dir = release_revisions_dir(release_id) / str(revision)
+    release_path = revision_dir / "release.json"
+    runtime_path = revision_dir / "runtime.json"
+    compose_path = revision_dir / "compose.yaml"
+
+    workspace_root = _workspace_root()
+    artifacts: Dict[str, str] = {}
+    if release_path.exists():
+        artifacts["releaseSpecPath"] = str(release_path.relative_to(workspace_root))
+    if runtime_path.exists():
+        artifacts["runtimeSpecPath"] = str(runtime_path.relative_to(workspace_root))
+    if compose_path.exists():
+        artifacts["composeYamlPath"] = str(compose_path.relative_to(workspace_root))
+    return artifacts
+
+
+def list_release_operations(release_id: str) -> list[Dict[str, Any]]:
+    operations_dir = release_operations_dir(release_id)
+    if not operations_dir.exists():
+        return []
+    operations = []
+    for path in operations_dir.glob("*.json"):
+        try:
+            operations.append(read_json(path))
+        except json.JSONDecodeError:
+            continue
+    return sorted(operations, key=lambda op: op.get("createdAt", ""), reverse=True)
+
+
+def find_plan(plan_id: str) -> Optional[Dict[str, Any]]:
+    releases_root = _workspace_root() / "releases"
+    if not releases_root.exists():
+        return None
+    for release_dir in releases_root.iterdir():
+        if not release_dir.is_dir():
+            continue
+        plan_path = release_dir / "plans" / f"{plan_id}.json"
+        if plan_path.exists():
+            return read_json(plan_path)
+    return None
+
+
+def _updated_at_iso(path: Path) -> str:
+    return datetime.utcfromtimestamp(path.stat().st_mtime).isoformat() + "Z"
+
+
+def updated_at_for_relative_path(relative_path: str) -> str:
+    path = _workspace_root() / relative_path
+    if not path.exists():
+        return _now_iso()
+    return _updated_at_iso(path)
+
+
+def list_release_summaries() -> list[Dict[str, Any]]:
+    summaries = []
+    for release_id in list_release_ids():
+        runtime = load_latest_runtime(release_id)
+        if not runtime:
+            continue
+        release_meta = runtime.get("metadata", {})
+        revision = runtime.get("release", {}).get("revision")
+        backend = runtime.get("release", {}).get("backend", {}).get("type")
+        revision_dir = release_revisions_dir(release_id) / str(revision)
+        runtime_path = revision_dir / "runtime.json"
+        updated_at = _updated_at_iso(runtime_path) if runtime_path.exists() else _now_iso()
+        summaries.append({
+            "releaseId": release_id,
+            "name": release_meta.get("name"),
+            "namespace": release_meta.get("namespace"),
+            "desiredRevision": revision,
+            "backend": backend,
+            "updatedAt": updated_at
+        })
+    return sorted(summaries, key=lambda item: item["releaseId"])
+
+
 __all__ = [
+    "artifacts_root",
     "contracts_root",
     "latest_revision",
     "load_latest_runtime",
     "load_runtime_revision",
     "load_plan",
     "load_runtime_by_path",
+    "load_artifact_by_path",
     "load_compose_path",
     "load_operation",
     "find_operation",
+    "find_plan",
+    "list_release_operations",
+    "list_release_summaries",
+    "updated_at_for_relative_path",
+    "load_latest_release_spec",
+    "latest_artifacts",
+    "load_release_spec_revision",
+    "save_text_artifact",
+    "load_artifact_text",
     "list_release_ids",
     "latest_compose_path",
     "save_plan",

@@ -18,8 +18,8 @@ def test_release_plan_apply_status():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace_root = Path(tmpdir)
-        os.environ["SHINESEED_WORKSPACE"] = str(workspace_root)
-        os.environ["SHINESEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
+        os.environ["XYNSEED_WORKSPACE"] = str(workspace_root)
+        os.environ["XYNSEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
 
         client = TestClient(app)
 
@@ -29,13 +29,13 @@ def test_release_plan_apply_status():
             "metadata": {
                 "name": "runner",
                 "namespace": "core",
-                "labels": {"owner": "shineseed"}
+                "labels": {"owner": "xyn-seed"}
             },
             "backend": {"type": "k8s"},
             "components": [
                 {
                     "name": "runner-api",
-                    "image": "xyence/runner-api:dev",
+                    "image": "xyence/xyn-runner-api:git-b56708f",
                     "ports": [
                         {"name": "http", "containerPort": 8088, "hostPort": 8088, "protocol": "tcp"}
                     ],
@@ -44,7 +44,7 @@ def test_release_plan_apply_status():
             ]
         }
 
-        os.environ["SHINESEED_API_TOKEN"] = ""
+        os.environ["XYNSEED_API_TOKEN"] = ""
         plan_resp = client.post(
             "/api/v1/releases/plan",
             json={"release_spec": release_spec}
@@ -83,9 +83,9 @@ def test_release_auth_required():
     app.include_router(releases.router, prefix="/api/v1")
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        os.environ["SHINESEED_WORKSPACE"] = str(Path(tmpdir))
-        os.environ["SHINESEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
-        os.environ["SHINESEED_API_TOKEN"] = "secret-token"
+        os.environ["XYNSEED_WORKSPACE"] = str(Path(tmpdir))
+        os.environ["XYNSEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
+        os.environ["XYNSEED_API_TOKEN"] = "secret-token"
 
         client = TestClient(app)
         release_spec = {
@@ -94,13 +94,13 @@ def test_release_auth_required():
             "metadata": {
                 "name": "runner",
                 "namespace": "core",
-                "labels": {"owner": "shineseed"}
+                "labels": {"owner": "xyn-seed"}
             },
             "backend": {"type": "k8s"},
             "components": [
                 {
                     "name": "runner-api",
-                    "image": "xyence/runner-api:dev"
+                    "image": "xyence/xyn-runner-api:git-b56708f"
                 }
             ]
         }

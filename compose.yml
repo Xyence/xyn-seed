@@ -36,7 +36,8 @@ services:
       DATABASE_URL: postgresql://xyn:xyn_dev_password@postgres:5432/xyn
       REDIS_URL: redis://redis:6379/0
       ARTIFACT_STORE_PATH: /app/artifacts
-      XYN_SEED_CONTRACTS_ROOT: /xyn-contracts
+      XYNSEED_WORKSPACE: /app/workspace
+      XYNSEED_CONTRACTS_ROOT: /xyn-contracts
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       ENV_ID: local-dev
@@ -45,6 +46,7 @@ services:
       - "8001:8000"
     volumes:
       - ./artifacts:/app/artifacts
+      - ./workspace:/app/workspace
       - ./core:/app/core
       - /home/ubuntu/src/xyn-contracts:/xyn-contracts:ro
       - /var/run/docker.sock:/var/run/docker.sock

@@ -46,9 +46,13 @@ Thumbs.db
 
 # Xyn Seed specific
 artifacts/
+workspace/
 *.db
 *.log
 
 # Temporary files
 *.tmp
 *.temp
+
+# Workspace
+WORKSPACE.md

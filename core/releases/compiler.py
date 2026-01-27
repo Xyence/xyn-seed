@@ -82,6 +82,7 @@ def compile_release_to_runtime(
             "image": image,
             "ports": _ports_release_to_runtime(component.get("ports", [])),
             "env": _env_dict_to_list(component.get("env", {})),
+            **({"healthcheck": component["healthcheck"]} if component.get("healthcheck") else {}),
             "volumeMounts": [
                 {
                     "name": mount["volume"],

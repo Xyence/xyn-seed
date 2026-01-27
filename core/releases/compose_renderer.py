@@ -20,6 +20,25 @@ def render_compose(runtime_spec: Dict[str, Any]) -> str:
     networks = [net["name"] for net in _sorted_by_name(runtime_spec.get("networks", []))]
     volumes = [vol["name"] for vol in _sorted_by_name(runtime_spec.get("volumes", []))]
 
+    def _append_yaml_value(lines: List[str], indent: int, key: str, value: Any) -> None:
+        prefix = " " * indent
+        if isinstance(value, list):
+            lines.append(f"{prefix}{key}:")
+            for item in value:
+                lines.append(f"{prefix}  - {item}")
+        elif isinstance(value, dict):
+            lines.append(f"{prefix}{key}:")
+            for sub_key in sorted(value.keys()):
+                sub_value = value[sub_key]
+                if isinstance(sub_value, list):
+                    lines.append(f"{prefix}  {sub_key}:")
+                    for item in sub_value:
+                        lines.append(f"{prefix}    - {item}")
+                else:
+                    lines.append(f"{prefix}  {sub_key}: {sub_value}")
+        else:
+            lines.append(f"{prefix}{key}: {value}")
+
     for deployment in _sorted_by_name(runtime_spec["deployments"]):
         service_name = deployment["name"]
         container = deployment["podTemplate"]["containers"][0]
@@ -34,6 +53,12 @@ def render_compose(runtime_spec: Dict[str, Any]) -> str:
                     lines.append(f"      {env_item['name']}: {env_item['value']}")
                 elif "valueFromSecret" in env_item:
                     lines.append(f"      {env_item['name']}: ${env_item['valueFromSecret']}")
+
+        healthcheck = container.get("healthcheck")
+        if healthcheck:
+            lines.append("    healthcheck:")
+            for key in sorted(healthcheck.keys()):
+                _append_yaml_value(lines, 6, key, healthcheck[key])
 
         ports = container.get("ports", [])
         if ports:

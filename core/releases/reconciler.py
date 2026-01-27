@@ -15,7 +15,7 @@ _last_action: Dict[str, float] = {}
 
 
 def _interval_seconds() -> int:
-    raw = os.getenv("SHINESEED_RECONCILE_INTERVAL", "30")
+    raw = os.getenv("XYNSEED_RECONCILE_INTERVAL", "30")
     try:
         return int(raw)
     except ValueError:

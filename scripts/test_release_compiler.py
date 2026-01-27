@@ -26,7 +26,7 @@ def test_compile_build_image_name_and_published_port():
         "metadata": {
             "name": "builder",
             "namespace": "core",
-            "labels": {"owner": "shineseed"}
+            "labels": {"owner": "xyn-seed"}
         },
         "backend": {"type": "compose"},
         "components": [

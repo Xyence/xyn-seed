@@ -14,7 +14,7 @@ def test_render_compose_uses_published_port():
         "metadata": {
             "name": "runner",
             "namespace": "core",
-            "labels": {"owner": "shineseed"}
+            "labels": {"owner": "xyn-seed"}
         },
         "release": {
             "releaseId": "core.runner",
@@ -32,7 +32,7 @@ def test_render_compose_uses_published_port():
                     "containers": [
                         {
                             "name": "runner-api",
-                            "image": "xyence/runner-api:dev",
+                            "image": "xyence/xyn-runner-api:git-b56708f",
                             "ports": [
                                 {
                                     "name": "http",
@@ -44,6 +44,12 @@ def test_render_compose_uses_published_port():
                             "env": [
                                 {"name": "RUNNER_LOG_LEVEL", "value": "info"}
                             ],
+                            "healthcheck": {
+                                "test": ["CMD", "curl", "-f", "http://localhost:8088/healthz"],
+                                "interval": "10s",
+                                "timeout": "5s",
+                                "retries": 5
+                            },
                             "volumeMounts": [
                                 {"name": "runner-workspace", "mountPath": "/workspace"}
                             ]
@@ -61,9 +67,18 @@ def test_render_compose_uses_published_port():
         "\n"
         "services:\n"
         "  runner-api:\n"
-        "    image: xyence/runner-api:dev\n"
+        "    image: xyence/xyn-runner-api:git-b56708f\n"
         "    environment:\n"
         "      RUNNER_LOG_LEVEL: info\n"
+        "    healthcheck:\n"
+        "      interval: 10s\n"
+        "      retries: 5\n"
+        "      test:\n"
+        "        - CMD\n"
+        "        - curl\n"
+        "        - -f\n"
+        "        - http://localhost:8088/healthz\n"
+        "      timeout: 5s\n"
         "    ports:\n"
         "      - \"8088:8088\"\n"
         "    volumes:\n"
@@ -71,7 +86,7 @@ def test_render_compose_uses_published_port():
         "    networks:\n"
         "      - runner-net\n"
         "    labels:\n"
-        "      owner: shineseed\n"
+        "      owner: xyn-seed\n"
         "      release_id: core.runner\n"
         "      revision: 1\n"
         "      service: runner-api\n"

@@ -35,13 +35,13 @@ def test_release_integration_compose():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         workspace_root = Path(tmpdir)
-        os.environ["SHINESEED_WORKSPACE"] = str(workspace_root)
-        os.environ["SHINESEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
+        os.environ["XYNSEED_WORKSPACE"] = str(workspace_root)
+        os.environ["XYNSEED_CONTRACTS_ROOT"] = str(Path(__file__).resolve().parents[2] / "xyn-contracts")
 
         client = TestClient(app)
 
         token = "secret-token"
-        os.environ["SHINESEED_API_TOKEN"] = token
+        os.environ["XYNSEED_API_TOKEN"] = token
 
         release_spec = {
             "apiVersion": "xyn.seed/v1",
@@ -49,7 +49,7 @@ def test_release_integration_compose():
             "metadata": {
                 "name": "integration",
                 "namespace": "core",
-                "labels": {"owner": "shineseed"}
+                "labels": {"owner": "xyn-seed"}
             },
             "backend": {"type": "compose"},
             "components": [
