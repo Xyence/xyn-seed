@@ -52,8 +52,18 @@ def compile_release_to_runtime(
             "revision": revision,
             "backend": backend
         },
-        "networks": _sorted_by_name(release_spec.get("networks", [])),
-        "volumes": _sorted_by_name(release_spec.get("volumes", [])),
+        "networks": _sorted_by_name(
+            [
+                {key: value for key, value in network.items() if key != "type"}
+                for network in release_spec.get("networks", [])
+            ]
+        ),
+        "volumes": _sorted_by_name(
+            [
+                {key: value for key, value in volume.items() if key != "type"}
+                for volume in release_spec.get("volumes", [])
+            ]
+        ),
         "deployments": [],
         "services": [],
         "routes": release_spec.get("routes", [])
