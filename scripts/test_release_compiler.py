@@ -21,7 +21,7 @@ def test_compile_build_image_name_and_published_port():
     runtime_schema = load_schema("RuntimeSpec.schema.json")
 
     release_spec = {
-        "apiVersion": "xyn.shineseed/v1",
+        "apiVersion": "xyn.seed/v1",
         "kind": "Release",
         "metadata": {
             "name": "builder",

@@ -24,7 +24,7 @@ def test_release_plan_apply_status():
         client = TestClient(app)
 
         release_spec = {
-            "apiVersion": "xyn.shineseed/v1",
+            "apiVersion": "xyn.seed/v1",
             "kind": "Release",
             "metadata": {
                 "name": "runner",
@@ -89,7 +89,7 @@ def test_release_auth_required():
 
         client = TestClient(app)
         release_spec = {
-            "apiVersion": "xyn.shineseed/v1",
+            "apiVersion": "xyn.seed/v1",
             "kind": "Release",
             "metadata": {
                 "name": "runner",

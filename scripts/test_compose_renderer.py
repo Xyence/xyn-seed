@@ -9,7 +9,7 @@ from core.releases.compose_renderer import render_compose  # noqa: E402
 
 def test_render_compose_uses_published_port():
     runtime_spec = {
-        "apiVersion": "xyn.shineseed/v1",
+        "apiVersion": "xyn.seed/v1",
         "kind": "Runtime",
         "metadata": {
             "name": "runner",

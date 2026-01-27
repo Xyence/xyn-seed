@@ -40,7 +40,7 @@ def compile_release_to_runtime(
     backend = release_spec["backend"]
 
     runtime = {
-        "apiVersion": release_spec["apiVersion"],
+        "apiVersion": "xyn.seed/v1",
         "kind": "Runtime",
         "metadata": {
             "name": name,

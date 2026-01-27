@@ -44,7 +44,7 @@ def test_release_integration_compose():
         os.environ["SHINESEED_API_TOKEN"] = token
 
         release_spec = {
-            "apiVersion": "xyn.shineseed/v1",
+            "apiVersion": "xyn.seed/v1",
             "kind": "Release",
             "metadata": {
                 "name": "integration",
