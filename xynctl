@@ -43,7 +43,6 @@ def check_env_file():
         if template_file.exists():
             print_warning(".env file not found")
             print_info("Creating .env from template...")
-            template_file.read_text()
             env_file.write_text(template_file.read_text())
             print_success("Created .env file from template")
             print_warning("Please edit .env and add your API keys before starting")
@@ -69,8 +68,12 @@ def load_env():
     return env_vars
 
 
-def check_api_keys():
+def check_api_keys(skip_ai_keys: bool) -> bool:
     """Validate that at least one AI provider key is configured."""
+    if skip_ai_keys:
+        print_warning("Skipping AI key validation (--skip-ai-keys)")
+        return True
+
     env_vars = load_env()
 
     openai_key = env_vars.get('OPENAI_API_KEY', '').strip()
@@ -85,9 +88,9 @@ def check_api_keys():
         return False
 
     if openai_key:
-        print_success(f"OpenAI API key configured")
+        print_success("OpenAI API key configured")
     if anthropic_key:
-        print_success(f"Anthropic API key configured")
+        print_success("Anthropic API key configured")
 
     return True
 
@@ -141,20 +144,20 @@ def create_artifacts_dir():
     return True
 
 
-def preflight():
+def preflight(skip_ai_keys: bool) -> bool:
     """Run all preflight checks."""
     print_info("Running Xyn Seed preflight checks...\n")
 
     checks = [
         ("Environment file", check_env_file),
-        ("API keys", check_api_keys),
+        ("API keys", lambda: check_api_keys(skip_ai_keys)),
         ("Docker", check_docker),
         ("Docker Compose", check_docker_compose),
         ("Artifacts directory", create_artifacts_dir),
     ]
 
     all_passed = True
-    for name, check_fn in checks:
+    for _name, check_fn in checks:
         if not check_fn():
             all_passed = False
 
@@ -168,15 +171,15 @@ def preflight():
     return True
 
 
-def start():
+def start(detached: bool) -> bool:
     """Start the Xyn Seed platform."""
     print_info("\nStarting Xyn Seed platform...\n")
 
+    args = ["docker", "compose", "up", "--build"]
+    if detached:
+        args.append("-d")
     try:
-        subprocess.run(
-            ["docker", "compose", "up", "--build"],
-            check=True
-        )
+        subprocess.run(args, check=True)
     except subprocess.CalledProcessError as e:
         print_error(f"Failed to start platform: {e}")
         return False
@@ -188,16 +191,25 @@ def start():
     return True
 
 
+def parse_flags(argv):
+    return {
+        "non_interactive": "--non-interactive" in argv,
+        "skip_ai_keys": "--skip-ai-keys" in argv,
+    }
+
+
 def main():
     """Main entry point."""
+    flags = parse_flags(sys.argv)
+
     if len(sys.argv) > 1:
         cmd = sys.argv[1]
 
         if cmd == "preflight":
-            sys.exit(0 if preflight() else 1)
+            sys.exit(0 if preflight(flags["skip_ai_keys"]) else 1)
         elif cmd == "start":
-            if preflight():
-                sys.exit(0 if start() else 1)
+            if preflight(flags["skip_ai_keys"]):
+                sys.exit(0 if start(flags["non_interactive"]) else 1)
             else:
                 sys.exit(1)
         elif cmd == "stop":
@@ -210,11 +222,11 @@ def main():
         elif cmd == "help":
             print("Xyn Seed Control Tool (xynctl)")
             print("\nUsage:")
-            print("  ./xynctl preflight    - Run preflight checks only")
-            print("  ./xynctl start        - Run preflight and start platform")
-            print("  ./xynctl stop         - Stop the platform")
-            print("  ./xynctl logs [svc]   - Show logs (optionally for specific service)")
-            print("  ./xynctl help         - Show this help")
+            print("  ./xynctl preflight [--skip-ai-keys]    - Run preflight checks only")
+            print("  ./xynctl start [--non-interactive] [--skip-ai-keys] - Run preflight and start platform")
+            print("  ./xynctl stop                         - Stop the platform")
+            print("  ./xynctl logs [svc]                   - Show logs (optionally for specific service)")
+            print("  ./xynctl help                         - Show this help")
             sys.exit(0)
         else:
             print_error(f"Unknown command: {cmd}")
@@ -222,8 +234,8 @@ def main():
             sys.exit(1)
     else:
         # Default: preflight + start
-        if preflight():
-            start()
+        if preflight(flags["skip_ai_keys"]):
+            start(flags["non_interactive"])
         else:
             sys.exit(1)
 
