@@ -46,7 +46,7 @@ def check_env_file():
             env_file.write_text(template_file.read_text())
             print_success("Created .env file from template")
             print_warning("Please edit .env and add your API keys before starting")
-            return False
+            return True
         else:
             print_error(".env.template not found!")
             return False
