@@ -2,6 +2,7 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: xyn-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_DB: xyn
       POSTGRES_USER: xyn
@@ -19,6 +20,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: xyn-redis
+    restart: unless-stopped
     ports:
       - "6380:6379"
     healthcheck:
@@ -32,6 +34,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: xyn-core
+    restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://xyn:xyn_dev_password@postgres:5432/xyn
       REDIS_URL: redis://redis:6379/0
