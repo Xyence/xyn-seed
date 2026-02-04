@@ -8,6 +8,8 @@ import os
 import sys
 import subprocess
 from pathlib import Path
+import json
+import time
 
 
 class Colors:
@@ -198,6 +200,52 @@ def parse_flags(argv):
     }
 
 
+def apply_release_plan(path: str) -> int:
+    plan_path = Path(path)
+    if not plan_path.exists():
+        print_error(f"Release plan not found: {path}")
+        return 1
+    try:
+        plan = json.loads(plan_path.read_text())
+    except json.JSONDecodeError as exc:
+        print_error(f"Invalid release plan JSON: {exc}")
+        return 1
+    steps = plan.get("steps") or []
+    execution = {"status": "succeeded", "steps": []}
+    for step in steps:
+        step_name = step.get("name") or "step"
+        commands = step.get("commands") or []
+        step_record = {"name": step_name, "commands": []}
+        for command in commands:
+            started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            result = subprocess.run(command, shell=True, capture_output=True, text=True)
+            finished_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            command_record = {
+                "command": command,
+                "status": "succeeded" if result.returncode == 0 else "failed",
+                "exit_code": result.returncode,
+                "started_at": started_at,
+                "finished_at": finished_at,
+                "stdout": result.stdout[-4000:],
+                "stderr": result.stderr[-4000:],
+            }
+            step_record["commands"].append(command_record)
+            if result.returncode != 0:
+                execution["status"] = "failed"
+                execution.setdefault("failed_command", command_record)
+                execution["steps"].append(step_record)
+                _write_deploy_execution(plan_path, execution)
+                return result.returncode
+        execution["steps"].append(step_record)
+    _write_deploy_execution(plan_path, execution)
+    return 0
+
+
+def _write_deploy_execution(plan_path: Path, execution: dict) -> None:
+    output_path = plan_path.parent / "deploy_execution.json"
+    output_path.write_text(json.dumps(execution, indent=2))
+
+
 def main():
     """Main entry point."""
     flags = parse_flags(sys.argv)
@@ -226,8 +274,20 @@ def main():
             print("  ./xynctl start [--non-interactive] [--skip-ai-keys] - Run preflight and start platform")
             print("  ./xynctl stop                         - Stop the platform")
             print("  ./xynctl logs [svc]                   - Show logs (optionally for specific service)")
+            print("  ./xynctl apply --from <path>          - Apply a release plan JSON")
             print("  ./xynctl help                         - Show this help")
             sys.exit(0)
+        elif cmd == "apply":
+            if "--from" not in sys.argv:
+                print_error("Missing --from <path>")
+                sys.exit(1)
+            idx = sys.argv.index("--from")
+            try:
+                path = sys.argv[idx + 1]
+            except IndexError:
+                print_error("Missing path after --from")
+                sys.exit(1)
+            sys.exit(apply_release_plan(path))
         else:
             print_error(f"Unknown command: {cmd}")
             print_info("Run './xynctl help' for usage information")
