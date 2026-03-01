@@ -18,6 +18,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import RedirectResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger(__name__)
@@ -163,6 +164,13 @@ def _register_ui_mount(app: FastAPI, role: dict[str, Any], roots: list[Path], ar
     mount_path = str(role.get("mount_path") or "/").strip() or "/"
     static_dir = str(role.get("static_dir") or "").strip()
     dev_proxy_url = str(role.get("dev_proxy_url") or "").strip()
+
+    if mount_path != "/" and not mount_path.endswith("/"):
+        slash_path = f"{mount_path}/"
+
+        @app.get(mount_path, include_in_schema=False)
+        async def _ui_mount_redirect() -> RedirectResponse:
+            return RedirectResponse(url=slash_path, status_code=307)
 
     if static_dir:
         resolved_static = _resolve_path(static_dir, roots)
