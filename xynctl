@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -327,6 +328,42 @@ def _deployment_states() -> list[dict[str, Any]]:
     return rows
 
 
+def _discover_provisioned_instances_from_docker() -> list[dict[str, Any]]:
+    code, stdout, _ = _run_capture(["docker", "ps", "--format", "{{.Names}}|{{.Ports}}"])
+    if code != 0:
+        return []
+    discovered: dict[str, dict[str, Any]] = {}
+    for raw in (stdout or "").splitlines():
+        if "|" not in raw:
+            continue
+        name, ports = raw.split("|", 1)
+        if not name.startswith("xyn-") or name.startswith("xyn-core") or name.startswith("xyn-postgres") or name.startswith("xyn-redis"):
+            continue
+        match = re.match(r"^(xyn-[a-z0-9-]+)-(ui|backend)-\d+$", name)
+        if not match:
+            continue
+        project = match.group(1)
+        service = match.group(2)
+        entry = discovered.setdefault(project, {"compose_project": project})
+        if service == "ui":
+            ui_match = re.search(r"(?:0\.0\.0\.0|\[::\]):(\d+)->80/tcp", ports)
+            if ui_match:
+                entry["ui_url"] = f"http://localhost:{ui_match.group(1)}"
+        if service == "backend":
+            api_match = re.search(r"(?:0\.0\.0\.0|\[::\]):(\d+)->8000/tcp", ports)
+            if api_match:
+                entry["api_url"] = f"http://localhost:{api_match.group(1)}"
+    return [row for row in discovered.values() if row.get("ui_url") or row.get("api_url")]
+
+
+def _run_capture(cmd: list[str]) -> tuple[int, str, str]:
+    try:
+        proc = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        return proc.returncode, proc.stdout, proc.stderr
+    except Exception as exc:
+        return 1, "", str(exc)
+
+
 def status(seed_url: str) -> int:
     print_info("Seed status")
     if _wait_for_seed_health(seed_url, timeout_seconds=2):
@@ -338,6 +375,8 @@ def status(seed_url: str) -> int:
     except Exception:
         pass
     states = _deployment_states()
+    if not states:
+        states = _discover_provisioned_instances_from_docker()
     if not states:
         print_warning("No provisioned local sibling instances found")
         return 0
