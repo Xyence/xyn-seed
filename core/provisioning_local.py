@@ -6,7 +6,6 @@ import re
 import shutil
 import socket
 import subprocess
-import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,17 +36,40 @@ def _workspace_root() -> Path:
     return Path(os.getenv("XYN_LOCAL_WORKSPACE_ROOT", ".xyn/workspace")).resolve()
 
 
+def _state_path(deploy_dir: Path) -> Path:
+    return deploy_dir / "deployment_state.json"
+
+
 def _sanitize_slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", value.lower()).strip("-")
     return slug or "local"
 
 
-def _find_free_port(start: int = 42000, end: int = 42999) -> int:
+def _used_host_ports() -> set[int]:
+    code, stdout, _ = _run(["docker", "ps", "--format", "{{.Ports}}"])
+    if code != 0:
+        return set()
+    used: set[int] = set()
+    for line in (stdout or "").splitlines():
+        for match in re.findall(r":(\d+)->", line):
+            try:
+                used.add(int(match))
+            except ValueError:
+                continue
+    return used
+
+
+def _find_free_port(start: int = 42000, end: int = 42999, used_ports: Optional[set[int]] = None) -> int:
+    used = used_ports or set()
     for port in range(start, end + 1):
+        if port in used:
+            continue
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            if sock.connect_ex(("127.0.0.1", port)) != 0:
+            try:
+                sock.bind(("0.0.0.0", port))
                 return port
+            except OSError:
+                continue
     raise RuntimeError("No free port available in allocation range")
 
 
@@ -274,24 +296,99 @@ class LocalDevChangeInput(BaseModel):
 
 class ProvisionLocalRequest(BaseModel):
     name: Optional[str] = None
+    force: bool = False
     job: Optional[LocalDevChangeInput] = None
+
+
+def _load_state(deploy_dir: Path) -> Optional[Dict[str, Any]]:
+    path = _state_path(deploy_dir)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _save_state(deploy_dir: Path, state: Dict[str, Any]) -> None:
+    _state_path(deploy_dir).write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _ensure_required_artifacts() -> list[dict[str, str]]:
+    roots = [Path("/home/ubuntu/src")]
+    env_roots = str(os.getenv("XYN_KERNEL_MANIFEST_ROOTS") or "").strip()
+    if env_roots:
+        roots = [Path(item.strip()) for item in env_roots.split(",") if item.strip()]
+    expected = [
+        ("xyn-api", "xyn-api/artifact.manifest.json"),
+        ("xyn-ui", "xyn-ui/artifact.manifest.json"),
+        ("xyn-ai", "xyn-ai/artifact.manifest.json"),
+    ]
+    ensured: list[dict[str, str]] = []
+    for slug, rel in expected:
+        found = None
+        for root in roots:
+            candidate = (root / rel).resolve()
+            if candidate.exists():
+                found = candidate
+                break
+        if not found:
+            continue
+        try:
+            manifest = json.loads(found.read_text(encoding="utf-8"))
+            artifact_meta = manifest.get("artifact") if isinstance(manifest, dict) else {}
+            version = str((artifact_meta or {}).get("version") or "unknown")
+        except Exception:
+            version = "unknown"
+        ensured.append({"slug": slug, "version": version, "manifest_path": str(found)})
+    return ensured
 
 
 @router.post("/local-instance")
 def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
-    deployment_id = str(uuid.uuid4())
-    project_suffix = _sanitize_slug(request.name or deployment_id[:8])[:20]
+    project_suffix = _sanitize_slug(request.name or "local")[:20]
     project = f"xyn-{project_suffix}"
-    ui_port = _find_free_port()
-    api_port = _find_free_port(start=ui_port + 1)
     deploy_dir = _deployments_root() / project
     deploy_dir.mkdir(parents=True, exist_ok=True)
+    existing = _load_state(deploy_dir)
+    if existing and not request.force:
+        return {
+            "deployment_id": existing.get("deployment_id") or "",
+            "deployment_artifact_id": existing.get("deployment_artifact_id") or "",
+            "status": "reused",
+            "compose_project": project,
+            "compose_path": existing.get("compose_path") or str(deploy_dir / "compose.yaml"),
+            "ui_url": existing.get("ui_url") or "",
+            "api_url": existing.get("api_url") or "",
+            "surfaces": {"deployment": {"label": "Deployment", "path": existing.get("ui_url") or ""}},
+            "ensured_artifacts": existing.get("ensured_artifacts") or [],
+        }
+    deployment_id = str(uuid.uuid4())
     compose_path = deploy_dir / "compose.yaml"
-    compose_yaml = _compose_yaml(project=project, ui_port=ui_port, api_port=api_port)
-    compose_path.write_text(compose_yaml, encoding="utf-8")
+    ensured_artifacts = _ensure_required_artifacts()
 
-    cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "up", "-d", "--build"]
-    code, stdout, stderr = _run(cmd, cwd=deploy_dir)
+    up_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "up", "-d", "--build"]
+    down_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "down", "--remove-orphans"]
+    code = 1
+    stdout = ""
+    stderr = ""
+    ui_port = 0
+    api_port = 0
+    for attempt in range(5):
+        used_ports = _used_host_ports()
+        ui_port = _find_free_port(used_ports=used_ports)
+        used_ports.add(ui_port)
+        api_port = _find_free_port(start=ui_port + 1, used_ports=used_ports)
+        compose_yaml = _compose_yaml(project=project, ui_port=ui_port, api_port=api_port)
+        compose_path.write_text(compose_yaml, encoding="utf-8")
+        code, stdout, stderr = _run(up_cmd, cwd=deploy_dir)
+        if code == 0:
+            break
+        if "port is already allocated" not in (stderr or "").lower():
+            break
+        _run(down_cmd, cwd=deploy_dir)
+        if attempt == 4:
+            break
     status = "succeeded" if code == 0 else "failed"
 
     ui_url = f"http://localhost:{ui_port}"
@@ -304,6 +401,7 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
         "compose_path": str(compose_path),
         "ui_url": ui_url,
         "api_url": api_url,
+        "ensured_artifacts": ensured_artifacts,
         "created_at": _utc_now().isoformat(),
     }
     deployment_metadata = {
@@ -372,6 +470,7 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
         "compose_path": str(compose_path),
         "ui_url": ui_url,
         "api_url": api_url,
+        "ensured_artifacts": ensured_artifacts,
         "surfaces": {
             "deployment": {"label": "Deployment", "path": ui_url},
         },
@@ -386,4 +485,17 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
             "branch_name": job_result.branch_name if job_result else None,
             "commit_sha": job_result.commit_sha if job_result else None,
         }
+    _save_state(
+        deploy_dir,
+        {
+            "deployment_id": deployment_id,
+            "deployment_artifact_id": deployment_artifact_id,
+            "compose_project": project,
+            "compose_path": str(compose_path),
+            "ui_url": ui_url,
+            "api_url": api_url,
+            "ensured_artifacts": ensured_artifacts,
+            "updated_at": _utc_now().isoformat(),
+        },
+    )
     return response

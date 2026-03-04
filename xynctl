@@ -1,203 +1,350 @@
 #!/usr/bin/env python3
 """
-xynctl - Xyn Seed Bootstrap and Preflight Tool
-
-This tool validates the environment and starts the Xyn Seed platform.
+xynctl - Xyn Seed bootstrap and local provisioning tool.
 """
-import os
-import sys
-import subprocess
-from pathlib import Path
+from __future__ import annotations
+
 import json
+import os
+import subprocess
+import sys
 import time
+from pathlib import Path
+from typing import Any, Dict, Optional
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 
 
 class Colors:
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    YELLOW = '\033[93m'
-    BLUE = '\033[94m'
-    END = '\033[0m'
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    END = "\033[0m"
 
 
-def print_error(msg):
+def print_error(msg: str) -> None:
     print(f"{Colors.RED}✗ {msg}{Colors.END}")
 
 
-def print_success(msg):
+def print_success(msg: str) -> None:
     print(f"{Colors.GREEN}✓ {msg}{Colors.END}")
 
 
-def print_warning(msg):
+def print_warning(msg: str) -> None:
     print(f"{Colors.YELLOW}⚠ {msg}{Colors.END}")
 
 
-def print_info(msg):
+def print_info(msg: str) -> None:
     print(f"{Colors.BLUE}ℹ {msg}{Colors.END}")
 
 
-def check_env_file():
-    """Check if .env file exists, if not create from template."""
-    env_file = Path(".env")
-    template_file = Path(".env.template")
+AI_KEY_SPECS = {
+    "openai": ("XYN_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "gemini": ("XYN_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "anthropic": ("XYN_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+}
 
-    if not env_file.exists():
-        if template_file.exists():
-            print_warning(".env file not found")
-            print_info("Creating .env from template...")
-            env_file.write_text(template_file.read_text())
-            print_success("Created .env file from template")
-            print_warning("Please edit .env and add your API keys before starting")
-            return True
-        else:
-            print_error(".env.template not found!")
-            return False
+
+def _as_bool(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_args(argv: list[str]) -> dict[str, Any]:
+    command = argv[1] if len(argv) > 1 and not argv[1].startswith("-") else ""
+    values: dict[str, Any] = {
+        "command": command,
+        "non_interactive": "--non-interactive" in argv,
+        "skip_ai_keys": "--skip-ai-keys" in argv,
+        "provision": "--provision" in argv,
+        "force": "--force" in argv,
+        "name": None,
+        "job_prompt": None,
+        "repo_ref": None,
+        "seed_url": None,
+    }
+    for idx, token in enumerate(argv):
+        if token in {"--name", "--job-prompt", "--repo-ref", "--seed-url"}:
+            if idx + 1 < len(argv):
+                key = token.replace("--", "").replace("-", "_")
+                values[key] = argv[idx + 1]
+    return values
+
+
+def check_env_file() -> bool:
+    env_file = Path(".env")
+    template_candidates = [Path(".env.example"), Path(".env.template")]
+    template = next((candidate for candidate in template_candidates if candidate.exists()), None)
+    if env_file.exists():
+        return True
+    if not template:
+        print_error(".env.example/.env.template not found")
+        return False
+    print_warning(".env not found")
+    print_info(f"Creating .env from {template.name} ...")
+    env_file.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
+    print_success("Created .env. Add one AI key (e.g., XYN_OPENAI_API_KEY) and re-run.")
     return True
 
 
-def load_env():
-    """Load environment variables from .env file."""
+def load_env() -> dict[str, str]:
     env_file = Path(".env")
-    env_vars = {}
-
-    if env_file.exists():
-        for line in env_file.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith('#') and '=' in line:
-                key, value = line.split('=', 1)
-                env_vars[key.strip()] = value.strip()
-
+    env_vars: dict[str, str] = {}
+    if not env_file.exists():
+        return env_vars
+    for raw in env_file.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        env_vars[key.strip()] = value.strip()
     return env_vars
 
 
+def normalize_ai_env(env_vars: dict[str, str]) -> dict[str, str]:
+    normalized = dict(env_vars)
+    for provider, names in AI_KEY_SPECS.items():
+        canonical = names[0]
+        first = ""
+        for name in names:
+            value = str(normalized.get(name, "")).strip()
+            if value:
+                first = value
+                break
+        if first:
+            for name in names:
+                if not str(normalized.get(name, "")).strip():
+                    normalized[name] = first
+            normalized[canonical] = first
+
+    ai_disabled = _as_bool(normalized.get("XYN_AI_DISABLED", "false"))
+    if ai_disabled:
+        normalized.setdefault("XYN_AI_PROVIDER", "none")
+    else:
+        if not str(normalized.get("XYN_AI_PROVIDER", "")).strip():
+            if str(normalized.get("XYN_OPENAI_API_KEY", "")).strip():
+                normalized["XYN_AI_PROVIDER"] = "openai"
+            elif str(normalized.get("XYN_GEMINI_API_KEY", "")).strip():
+                normalized["XYN_AI_PROVIDER"] = "gemini"
+            elif str(normalized.get("XYN_ANTHROPIC_API_KEY", "")).strip():
+                normalized["XYN_AI_PROVIDER"] = "anthropic"
+    return normalized
+
+
 def check_api_keys(skip_ai_keys: bool) -> bool:
-    """Validate that at least one AI provider key is configured."""
     if skip_ai_keys:
         print_warning("Skipping AI key validation (--skip-ai-keys)")
         return True
+    env_vars = normalize_ai_env(load_env())
+    ai_disabled = _as_bool(env_vars.get("XYN_AI_DISABLED", "false"))
+    if ai_disabled:
+        print_warning("AI explicitly disabled (XYN_AI_DISABLED=true)")
+        return True
 
-    env_vars = load_env()
-
-    openai_key = env_vars.get('OPENAI_API_KEY', '').strip()
-    anthropic_key = env_vars.get('ANTHROPIC_API_KEY', '').strip()
-
-    if not openai_key and not anthropic_key:
-        print_error("No AI provider keys configured!")
-        print_info("At least one of the following is required:")
-        print_info("  - OPENAI_API_KEY")
-        print_info("  - ANTHROPIC_API_KEY")
-        print_info("\nPlease edit .env and add your API key(s)")
+    present = [
+        key for key in ("XYN_OPENAI_API_KEY", "XYN_GEMINI_API_KEY", "XYN_ANTHROPIC_API_KEY") if str(env_vars.get(key, "")).strip()
+    ]
+    if not present:
+        print_error("No AI provider key configured.")
+        print_info("Set one of the following in .env:")
+        print_info("  - XYN_OPENAI_API_KEY=...")
+        print_info("  - XYN_GEMINI_API_KEY=...")
+        print_info("  - XYN_ANTHROPIC_API_KEY=...")
+        print_info("Or explicitly disable AI:")
+        print_info("  - XYN_AI_DISABLED=true")
         return False
-
-    if openai_key:
-        print_success("OpenAI API key configured")
-    if anthropic_key:
-        print_success("Anthropic API key configured")
-
+    for key in present:
+        print_success(f"{key} configured")
     return True
 
 
-def check_docker():
-    """Check if Docker is available and running."""
+def check_docker() -> bool:
     try:
-        result = subprocess.run(
-            ["docker", "ps"],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-        if result.returncode != 0:
-            print_error("Docker is not running or not accessible")
-            print_info("Please start Docker and try again")
-            return False
-        print_success("Docker is running")
-        return True
+        result = subprocess.run(["docker", "ps"], capture_output=True, text=True, check=False)
     except FileNotFoundError:
         print_error("Docker command not found")
-        print_info("Please install Docker: https://docs.docker.com/get-docker/")
         return False
+    if result.returncode != 0:
+        print_error("Docker is not running or not accessible")
+        return False
+    print_success("Docker is running")
+    return True
 
 
-def check_docker_compose():
-    """Check if Docker Compose is available."""
+def check_docker_compose() -> bool:
     try:
-        result = subprocess.run(
-            ["docker", "compose", "version"],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-        if result.returncode != 0:
-            print_error("Docker Compose is not available")
-            return False
-        print_success("Docker Compose is available")
-        return True
+        result = subprocess.run(["docker", "compose", "version"], capture_output=True, text=True, check=False)
     except FileNotFoundError:
         print_error("Docker Compose not found")
         return False
+    if result.returncode != 0:
+        print_error("Docker Compose is not available")
+        return False
+    print_success("Docker Compose is available")
+    return True
 
 
-def create_artifacts_dir():
-    """Create artifacts directory if it doesn't exist."""
-    artifacts_dir = Path("artifacts")
-    if not artifacts_dir.exists():
-        artifacts_dir.mkdir(parents=True)
+def create_artifacts_dir() -> bool:
+    path = Path("artifacts")
+    if not path.exists():
+        path.mkdir(parents=True)
         print_success("Created artifacts directory")
     return True
 
 
-def preflight(skip_ai_keys: bool) -> bool:
-    """Run all preflight checks."""
-    print_info("Running Xyn Seed preflight checks...\n")
+def build_runtime_env() -> dict[str, str]:
+    runtime = dict(os.environ)
+    env_vars = normalize_ai_env(load_env())
+    runtime.update(env_vars)
+    return runtime
 
+
+def preflight(skip_ai_keys: bool) -> bool:
+    print_info("Running Xyn Seed preflight checks...\n")
     checks = [
         ("Environment file", check_env_file),
-        ("API keys", lambda: check_api_keys(skip_ai_keys)),
+        ("AI keys", lambda: check_api_keys(skip_ai_keys)),
         ("Docker", check_docker),
         ("Docker Compose", check_docker_compose),
         ("Artifacts directory", create_artifacts_dir),
     ]
-
     all_passed = True
-    for _name, check_fn in checks:
-        if not check_fn():
+    for _, fn in checks:
+        if not fn():
             all_passed = False
-
     print()
     if not all_passed:
-        print_error("Preflight checks failed!")
-        print_info("Please fix the issues above and try again")
+        print_error("Preflight checks failed")
         return False
-
-    print_success("All preflight checks passed!")
+    print_success("All preflight checks passed")
     return True
 
 
-def start(detached: bool) -> bool:
-    """Start the Xyn Seed platform."""
-    print_info("\nStarting Xyn Seed platform...\n")
-
+def _compose_up(detached: bool, env: dict[str, str]) -> bool:
     args = ["docker", "compose", "up", "--build"]
     if detached:
         args.append("-d")
     try:
-        subprocess.run(args, check=True)
-    except subprocess.CalledProcessError as e:
-        print_error(f"Failed to start platform: {e}")
-        return False
-    except KeyboardInterrupt:
-        print_info("\nShutting down...")
-        subprocess.run(["docker", "compose", "down"])
+        subprocess.run(args, check=True, env=env)
         return True
+    except subprocess.CalledProcessError as exc:
+        print_error(f"Failed to start platform: {exc}")
+        return False
 
+
+def _wait_for_seed_health(seed_url: str, timeout_seconds: int = 120) -> bool:
+    deadline = time.time() + timeout_seconds
+    health_url = f"{seed_url.rstrip('/')}/health"
+    while time.time() < deadline:
+        try:
+            req = Request(health_url, method="GET")
+            with urlopen(req, timeout=5) as response:
+                if response.status == 200:
+                    return True
+        except Exception:
+            time.sleep(2)
+            continue
+    return False
+
+
+def _provision_local(seed_url: str, *, name: Optional[str], force: bool, job_prompt: Optional[str], repo_ref: Optional[str]) -> tuple[bool, dict[str, Any]]:
+    payload: dict[str, Any] = {}
+    if name:
+        payload["name"] = name
+    if force:
+        payload["force"] = True
+    if job_prompt:
+        payload["job"] = {"prompt": job_prompt, "repo_ref": repo_ref or str(Path.cwd().resolve())}
+    request = Request(
+        f"{seed_url.rstrip('/')}/api/v1/provision/local-instance",
+        method="POST",
+        headers={"Content-Type": "application/json"},
+        data=json.dumps(payload).encode("utf-8"),
+    )
+    try:
+        with urlopen(request, timeout=180) as response:
+            body = response.read().decode("utf-8")
+        return True, json.loads(body or "{}")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        return False, {"error": body or f"HTTP {exc.code}"}
+    except URLError as exc:
+        return False, {"error": str(exc)}
+
+
+def start(detached: bool, env: dict[str, str]) -> bool:
+    print_info("\nStarting Xyn Seed platform...\n")
+    if not _compose_up(detached=detached, env=env):
+        return False
     return True
 
 
-def parse_flags(argv):
-    return {
-        "non_interactive": "--non-interactive" in argv,
-        "skip_ai_keys": "--skip-ai-keys" in argv,
-    }
+def start_with_provision(env: dict[str, str], *, force: bool, name: Optional[str], job_prompt: Optional[str], repo_ref: Optional[str], seed_url: str) -> int:
+    if not start(detached=True, env=env):
+        return 1
+    print_info("Waiting for seed API readiness...")
+    if not _wait_for_seed_health(seed_url):
+        print_error(f"Seed API did not become healthy at {seed_url}/health")
+        return 2
+    print_success("Seed API is healthy")
+    print_info("Provisioning local sibling Xyn instance...")
+    ok, payload = _provision_local(seed_url, name=name, force=force, job_prompt=job_prompt, repo_ref=repo_ref)
+    if not ok:
+        print_error(f"Provisioning failed: {payload.get('error')}")
+        return 3
+    ui_url = str(payload.get("ui_url") or "").strip()
+    api_url = str(payload.get("api_url") or "").strip()
+    status = str(payload.get("status") or "unknown")
+    print_success(f"Provision status: {status}")
+    if payload.get("ensured_artifacts"):
+        print_info("Ensured artifacts:")
+        for row in payload.get("ensured_artifacts") or []:
+            print_info(f"  - {row.get('slug')}@{row.get('version')}")
+    if api_url:
+        print_info(f"API:  {api_url}")
+    if ui_url:
+        print_success(f"Open: {ui_url}")
+    else:
+        print_warning("Provisioning completed but no UI URL was returned")
+    return 0
+
+
+def _deployment_states() -> list[dict[str, Any]]:
+    root = Path(".xyn/deployments")
+    if not root.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir():
+            continue
+        state = child / "deployment_state.json"
+        if not state.exists():
+            continue
+        try:
+            rows.append(json.loads(state.read_text(encoding="utf-8")))
+        except Exception:
+            continue
+    return rows
+
+
+def status(seed_url: str) -> int:
+    print_info("Seed status")
+    if _wait_for_seed_health(seed_url, timeout_seconds=2):
+        print_success(f"Seed API healthy: {seed_url}/health")
+    else:
+        print_warning(f"Seed API not healthy: {seed_url}/health")
+    try:
+        subprocess.run(["docker", "compose", "ps"], check=False)
+    except Exception:
+        pass
+    states = _deployment_states()
+    if not states:
+        print_warning("No provisioned local sibling instances found")
+        return 0
+    print_info("Provisioned sibling instances:")
+    for row in states:
+        print_info(f"  - {row.get('compose_project')} -> {row.get('ui_url')} (api {row.get('api_url')})")
+    return 0
 
 
 def apply_release_plan(path: str) -> int:
@@ -246,58 +393,95 @@ def _write_deploy_execution(plan_path: Path, execution: dict) -> None:
     output_path.write_text(json.dumps(execution, indent=2))
 
 
-def main():
-    """Main entry point."""
-    flags = parse_flags(sys.argv)
+def main() -> None:
+    args = _parse_args(sys.argv)
+    cmd = args["command"]
+    seed_url = args["seed_url"] or "http://localhost:8001"
+    env = build_runtime_env()
 
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1]
+    if cmd == "preflight":
+        sys.exit(0 if preflight(args["skip_ai_keys"]) else 1)
+    if cmd == "stop":
+        print_info("Stopping Xyn Seed platform...")
+        subprocess.run(["docker", "compose", "down"], check=False)
+        sys.exit(0)
+    if cmd == "logs":
+        subprocess.run(["docker", "compose", "logs", "-f"] + sys.argv[2:], check=False)
+        sys.exit(0)
+    if cmd == "status":
+        sys.exit(status(seed_url))
+    if cmd == "apply":
+        if "--from" not in sys.argv:
+            print_error("Missing --from <path>")
+            sys.exit(1)
+        idx = sys.argv.index("--from")
+        if idx + 1 >= len(sys.argv):
+            print_error("Missing path after --from")
+            sys.exit(1)
+        sys.exit(apply_release_plan(sys.argv[idx + 1]))
+    if cmd == "provision":
+        if len(sys.argv) < 3 or sys.argv[2] != "local":
+            print_error("Usage: ./xynctl provision local [--name <name>] [--force] [--job-prompt <text>] [--repo-ref <path>]")
+            sys.exit(1)
+        if not preflight(args["skip_ai_keys"]):
+            sys.exit(1)
+        if not _wait_for_seed_health(seed_url, timeout_seconds=2):
+            print_warning("Seed core does not appear healthy yet; starting core stack first...")
+            if not start(detached=True, env=env):
+                sys.exit(2)
+            if not _wait_for_seed_health(seed_url):
+                print_error("Seed API is unavailable; cannot provision local instance")
+                sys.exit(3)
+        ok, payload = _provision_local(
+            seed_url,
+            name=args["name"],
+            force=args["force"],
+            job_prompt=args["job_prompt"],
+            repo_ref=args["repo_ref"],
+        )
+        if not ok:
+            print_error(f"Provisioning failed: {payload.get('error')}")
+            sys.exit(4)
+        print_success(f"Provision status: {payload.get('status')}")
+        if payload.get("ui_url"):
+            print_success(f"Open: {payload.get('ui_url')}")
+        print_info(json.dumps(payload, indent=2))
+        sys.exit(0)
+    if cmd in {"help", "--help", "-h"}:
+        print("Xyn Seed Control Tool (xynctl)")
+        print("\nUsage:")
+        print("  ./xynctl preflight [--skip-ai-keys]")
+        print("  ./xynctl start [--non-interactive] [--provision] [--force] [--name <name>] [--job-prompt <text>] [--repo-ref <path>]")
+        print("  ./xynctl quickstart [--force] [--name <name>]    # alias for start --provision")
+        print("  ./xynctl provision local [--force] [--name <name>] [--job-prompt <text>] [--repo-ref <path>]")
+        print("  ./xynctl status")
+        print("  ./xynctl stop")
+        print("  ./xynctl logs [service]")
+        print("  ./xynctl apply --from <path>")
+        sys.exit(0)
+    if cmd and cmd not in {"start", "quickstart"}:
+        print_error(f"Unknown command: {cmd}")
+        print_info("Run './xynctl help' for usage.")
+        sys.exit(1)
 
-        if cmd == "preflight":
-            sys.exit(0 if preflight(flags["skip_ai_keys"]) else 1)
-        elif cmd == "start":
-            if preflight(flags["skip_ai_keys"]):
-                sys.exit(0 if start(flags["non_interactive"]) else 1)
-            else:
-                sys.exit(1)
-        elif cmd == "stop":
-            print_info("Stopping Xyn Seed platform...")
-            subprocess.run(["docker", "compose", "down"])
-            sys.exit(0)
-        elif cmd == "logs":
-            subprocess.run(["docker", "compose", "logs", "-f"] + sys.argv[2:])
-            sys.exit(0)
-        elif cmd == "help":
-            print("Xyn Seed Control Tool (xynctl)")
-            print("\nUsage:")
-            print("  ./xynctl preflight [--skip-ai-keys]    - Run preflight checks only")
-            print("  ./xynctl start [--non-interactive] [--skip-ai-keys] - Run preflight and start platform")
-            print("  ./xynctl stop                         - Stop the platform")
-            print("  ./xynctl logs [svc]                   - Show logs (optionally for specific service)")
-            print("  ./xynctl apply --from <path>          - Apply a release plan JSON")
-            print("  ./xynctl help                         - Show this help")
-            sys.exit(0)
-        elif cmd == "apply":
-            if "--from" not in sys.argv:
-                print_error("Missing --from <path>")
-                sys.exit(1)
-            idx = sys.argv.index("--from")
-            try:
-                path = sys.argv[idx + 1]
-            except IndexError:
-                print_error("Missing path after --from")
-                sys.exit(1)
-            sys.exit(apply_release_plan(path))
-        else:
-            print_error(f"Unknown command: {cmd}")
-            print_info("Run './xynctl help' for usage information")
-            sys.exit(1)
-    else:
-        # Default: preflight + start
-        if preflight(flags["skip_ai_keys"]):
-            start(flags["non_interactive"])
-        else:
-            sys.exit(1)
+    # default: start
+    provision = args["provision"] or cmd == "quickstart"
+    if not preflight(args["skip_ai_keys"]):
+        sys.exit(1)
+    if provision:
+        sys.exit(
+            start_with_provision(
+                env,
+                force=args["force"],
+                name=args["name"],
+                job_prompt=args["job_prompt"],
+                repo_ref=args["repo_ref"],
+                seed_url=seed_url,
+            )
+        )
+    detached = bool(args["non_interactive"])
+    ok = start(detached=detached, env=env)
+    sys.exit(0 if ok else 2)
 
 
 if __name__ == "__main__":

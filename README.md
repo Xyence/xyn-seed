@@ -34,53 +34,48 @@ This is the **v0.0 implementation** - a local-first proof of concept demonstrati
 
 These features are planned for v1 and beyond.
 
-## Quick Start
+## Quickstart (local)
 
 ### Prerequisites
 
 - Docker and Docker Compose
-- At least one AI provider API key (OpenAI or Anthropic)
+- At least one AI provider API key (`XYN_OPENAI_API_KEY` or `XYN_GEMINI_API_KEY` or `XYN_ANTHROPIC_API_KEY`)
 
 ### 1. Clone and Configure
 
 ```bash
 cd xyn-seed
-cp .env.template .env
+cp .env.example .env
 ```
 
-Edit `.env` and add at least one API key:
+Edit `.env` and add exactly one key for the happy path:
 
 ```bash
-OPENAI_API_KEY=sk-...
-# OR
-ANTHROPIC_API_KEY=sk-ant-...
+XYN_OPENAI_API_KEY=sk-...
 ```
 
-### 2. Make xynctl Executable
+### 2. Make `xynctl` executable
 
 ```bash
 chmod +x xynctl
 ```
 
-### 3. Start the Platform
+### 3. Start + provision a local sibling instance
 
 ```bash
-./xynctl start
+./xynctl quickstart
+# same as: ./xynctl start --provision
 ```
 
 This will:
 - Run preflight checks (Docker, API keys, etc.)
-- Build and start all services
-- Initialize the database
-- Start the web UI on http://localhost:8000
+- Start seed core stack
+- Wait for seed API health
+- Provision a local sibling Xyn instance via docker compose
+- Print final URL: `Open: http://localhost:<port>`
 
-### 4. Access the UI
-
-Open your browser to:
-
-**http://localhost:8000**
-
-You'll be redirected to the Event Console.
+### 4. Open the printed URL
+Use the `Open:` URL printed by `xynctl`.
 
 ### Kernel Artifact Loading (Phase 1)
 
@@ -164,12 +159,15 @@ XYN_KERNEL_MANIFEST_ROOTS=/home/ubuntu/src
 ## xynctl Commands
 
 ```bash
-./xynctl              # Preflight + start (default)
-./xynctl preflight    # Run preflight checks only
-./xynctl start        # Start the platform
-./xynctl stop         # Stop the platform
-./xynctl logs [svc]   # View logs (optionally for specific service)
-./xynctl help         # Show help
+./xynctl                          # Preflight + start seed core
+./xynctl start --provision        # Start seed + auto-provision sibling instance
+./xynctl quickstart               # Alias for start --provision
+./xynctl provision local          # Provision/reuse sibling instance and print URLs
+./xynctl preflight                # Run preflight checks only
+./xynctl status                   # Show seed + provisioned local instance URLs
+./xynctl stop                     # Stop seed stack
+./xynctl logs [svc]               # View logs (optionally for specific service)
+./xynctl help                     # Show help
 ```
 
 ## Testing
