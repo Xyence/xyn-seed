@@ -11,6 +11,16 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _ENV_LOADED = False
+AI_MODEL_DEFAULTS = {
+    "openai": "gpt-5-mini",
+    "gemini": "gemini-2.0-flash",
+    "anthropic": "claude-3-7-sonnet-latest",
+}
+AI_PROVIDER_KEYS = {
+    "openai": ("XYN_OPENAI_API_KEY", "OPENAI_API_KEY"),
+    "gemini": ("XYN_GEMINI_API_KEY", "XYN_GOOGLE_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"),
+    "anthropic": ("XYN_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+}
 
 
 def _read_dotenv(path: Path) -> dict[str, str]:
@@ -67,33 +77,45 @@ class SeedConfig:
     oidc_redirect_uri: str
     ai_provider: str
     ai_model: str
+    ai_enabled: bool
+    openai_api_key: str
+    gemini_api_key: str
+    anthropic_api_key: str
+    secret_key: str
+    credentials_encryption_key: str
     database_url: str
     redis_url: str
 
 
-def _default_ai_provider() -> str:
-    explicit = _env("XYN_AI_PROVIDER", "").lower()
+def _resolve_ai_provider_and_keys() -> tuple[str, bool, dict[str, str]]:
+    keys = {
+        provider: _env(alias_set[0], "", aliases=alias_set[1:])
+        for provider, alias_set in AI_PROVIDER_KEYS.items()
+    }
+    available = [provider for provider, value in keys.items() if value]
+    explicit = _env("XYN_AI_PROVIDER", "").strip().lower()
     if explicit:
-        return explicit
-    if _env("OPENAI_API_KEY", ""):
-        return "openai"
-    if _env("ANTHROPIC_API_KEY", ""):
-        return "anthropic"
-    if _env("GEMINI_API_KEY", ""):
-        return "gemini"
-    return "none"
+        if explicit not in {"openai", "gemini", "anthropic", "none", "disabled"}:
+            raise RuntimeError("XYN_AI_PROVIDER must be one of: openai|gemini|anthropic|none")
+        if explicit in {"none", "disabled"}:
+            return "none", False, keys
+        if not keys.get(explicit):
+            required_key = AI_PROVIDER_KEYS[explicit][0]
+            raise RuntimeError(f"XYN_AI_PROVIDER={explicit} requires {required_key}")
+        return explicit, True, keys
+    if len(available) == 0:
+        return "none", False, keys
+    if len(available) == 1:
+        return available[0], True, keys
+    raise RuntimeError("Multiple AI provider keys are set; specify XYN_AI_PROVIDER explicitly")
 
 
 def _default_ai_model(provider: str) -> str:
     explicit = _env("XYN_AI_MODEL", "")
     if explicit:
         return explicit
-    if provider == "openai":
-        return "gpt-5-mini"
-    if provider == "anthropic":
-        return "claude-3-7-sonnet-latest"
-    if provider == "gemini":
-        return "gemini-2.0-flash"
+    if provider in AI_MODEL_DEFAULTS:
+        return AI_MODEL_DEFAULTS[provider]
     return "none"
 
 
@@ -125,11 +147,13 @@ def load_seed_config() -> SeedConfig:
         if missing:
             raise RuntimeError(f"OIDC mode requires: {', '.join(missing)}")
 
-    ai_provider = _default_ai_provider()
-    ai_model = _default_ai_model(ai_provider)
+    ai_provider, ai_enabled, ai_keys = _resolve_ai_provider_and_keys()
+    ai_model = _default_ai_model(ai_provider) if ai_enabled else "none"
 
     database_url = _env("DATABASE_URL", "postgresql://xyn:xyn_dev_password@postgres:5432/xyn")
     redis_url = _env("REDIS_URL", "redis://redis:6379/0")
+    secret_key = _env("XYN_SECRET_KEY", "")
+    credentials_encryption_key = _env("XYN_CREDENTIALS_ENCRYPTION_KEY", "")
 
     return SeedConfig(
         env=env,
@@ -141,6 +165,12 @@ def load_seed_config() -> SeedConfig:
         oidc_redirect_uri=oidc_redirect_uri,
         ai_provider=ai_provider,
         ai_model=ai_model,
+        ai_enabled=ai_enabled,
+        openai_api_key=ai_keys["openai"],
+        gemini_api_key=ai_keys["gemini"],
+        anthropic_api_key=ai_keys["anthropic"],
+        secret_key=secret_key,
+        credentials_encryption_key=credentials_encryption_key,
         database_url=database_url,
         redis_url=redis_url,
     )
@@ -158,6 +188,19 @@ def export_runtime_env(config: SeedConfig) -> dict[str, str]:
         "XYN_OIDC_REDIRECT_URI": config.oidc_redirect_uri,
         "XYN_AI_PROVIDER": config.ai_provider,
         "XYN_AI_MODEL": config.ai_model,
+        "XYN_AI_ENABLED": "true" if config.ai_enabled else "false",
+        "XYN_DEFAULT_MODEL_PROVIDER": config.ai_provider,
+        "XYN_DEFAULT_MODEL_NAME": config.ai_model,
+        "XYN_OPENAI_API_KEY": config.openai_api_key,
+        "XYN_GEMINI_API_KEY": config.gemini_api_key,
+        "XYN_GOOGLE_API_KEY": config.gemini_api_key,
+        "XYN_ANTHROPIC_API_KEY": config.anthropic_api_key,
+        "OPENAI_API_KEY": config.openai_api_key,
+        "GEMINI_API_KEY": config.gemini_api_key,
+        "GOOGLE_API_KEY": config.gemini_api_key,
+        "ANTHROPIC_API_KEY": config.anthropic_api_key,
+        "XYN_SECRET_KEY": config.secret_key,
+        "XYN_CREDENTIALS_ENCRYPTION_KEY": config.credentials_encryption_key,
         "DATABASE_URL": config.database_url,
         "REDIS_URL": config.redis_url,
     }

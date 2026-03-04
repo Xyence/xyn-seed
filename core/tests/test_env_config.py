@@ -1,0 +1,51 @@
+import os
+import unittest
+from unittest.mock import patch
+
+from core.env_config import load_seed_config
+
+
+class SeedEnvConfigTests(unittest.TestCase):
+    def _base_env(self) -> dict[str, str]:
+        return {
+            "XYN_ENV": "local",
+            "XYN_AUTH_MODE": "simple",
+            "XYN_INTERNAL_TOKEN": "test-token",
+            "DATABASE_URL": "postgresql://xyn:xyn_dev_password@postgres:5432/xyn",
+            "REDIS_URL": "redis://redis:6379/0",
+        }
+
+    def test_infers_provider_from_single_key(self):
+        env = self._base_env()
+        env["XYN_OPENAI_API_KEY"] = "sk-test-openai"
+        with patch("core.env_config._load_seed_dotenv_once", return_value=None), patch.dict(os.environ, env, clear=True):
+            config = load_seed_config()
+        self.assertTrue(config.ai_enabled)
+        self.assertEqual(config.ai_provider, "openai")
+        self.assertEqual(config.ai_model, "gpt-5-mini")
+
+    def test_requires_provider_when_multiple_keys_present(self):
+        env = self._base_env()
+        env["XYN_OPENAI_API_KEY"] = "sk-test-openai"
+        env["XYN_GEMINI_API_KEY"] = "gem-test"
+        with patch("core.env_config._load_seed_dotenv_once", return_value=None), patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError):
+                load_seed_config()
+
+    def test_explicit_provider_requires_matching_key(self):
+        env = self._base_env()
+        env["XYN_AI_PROVIDER"] = "anthropic"
+        with patch("core.env_config._load_seed_dotenv_once", return_value=None), patch.dict(os.environ, env, clear=True):
+            with self.assertRaises(RuntimeError):
+                load_seed_config()
+
+    def test_disables_ai_when_no_keys(self):
+        with patch("core.env_config._load_seed_dotenv_once", return_value=None), patch.dict(os.environ, self._base_env(), clear=True):
+            config = load_seed_config()
+        self.assertFalse(config.ai_enabled)
+        self.assertEqual(config.ai_provider, "none")
+        self.assertEqual(config.ai_model, "none")
+
+
+if __name__ == "__main__":
+    unittest.main()

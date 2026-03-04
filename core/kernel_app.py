@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from core import __version__
+from core.ai_bootstrap import ensure_default_agent_via_api
 from core.database import init_db
 from core.env_config import export_runtime_env, load_seed_config
 from core.kernel_loader import load_workspace_artifacts_into_app
@@ -50,14 +51,16 @@ async def _lifespan(app: FastAPI):
     config = load_seed_config()
     os.environ.update(export_runtime_env(config))
     logger.info(
-        "seed bootstrap config env=%s auth=%s ai_provider=%s ai_model=%s",
+        "seed bootstrap config env=%s auth=%s ai_provider=%s ai_model=%s ai_enabled=%s",
         config.env,
         config.auth_mode,
         config.ai_provider,
         config.ai_model,
+        config.ai_enabled,
     )
     logger.info("starting xyn-seed kernel v%s", __version__)
     init_db()
+    ensure_default_agent_via_api()
 
     loaded = await load_workspace_artifacts_into_app(app)
     logger.info("kernel loaded %d artifact(s)", len(loaded))

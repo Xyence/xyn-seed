@@ -20,12 +20,20 @@ Production deployments should inject env via seed/compose and should not depend 
 
 ### AI Provider Defaults
 
-- `XYN_AI_PROVIDER` (default: `openai`)
-- `XYN_AI_MODEL` (default: `gpt-5-mini`)
+- `XYN_AI_PROVIDER` (optional: `openai|gemini|anthropic`)
+- `XYN_AI_MODEL` (optional model override)
 - Provider keys:
-  - `OPENAI_API_KEY`
-  - `ANTHROPIC_API_KEY`
-  - `GEMINI_API_KEY`
+  - `XYN_OPENAI_API_KEY`
+  - `XYN_GEMINI_API_KEY`
+  - `XYN_ANTHROPIC_API_KEY`
+- Secret encryption key (for encrypted credential storage fallback):
+  - `XYN_SECRET_KEY` (or `XYN_CREDENTIALS_ENCRYPTION_KEY`)
+
+Provider resolution:
+- If `XYN_AI_PROVIDER` is set, the matching key is required.
+- If provider is unset and exactly one key is present, provider is inferred.
+- If provider is unset and multiple keys are present, startup fails fast and requires explicit provider.
+- If no keys are present, AI bootstrap is disabled and runtime remains bootable.
 
 ### Database / Cache
 
