@@ -4,7 +4,6 @@ import json
 import os
 import re
 import shutil
-import socket
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -51,35 +50,44 @@ def _sanitize_slug(value: str) -> str:
     return slug or "local"
 
 
-def _used_host_ports() -> set[int]:
-    code, stdout, _ = _run(["docker", "ps", "--format", "{{.Ports}}"])
-    if code != 0:
-        return set()
-    used: set[int] = set()
-    for line in (stdout or "").splitlines():
-        for match in re.findall(r":(\d+)->", line):
-            try:
-                used.add(int(match))
-            except ValueError:
-                continue
-    return used
+def _as_bool(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _find_free_port(start: int = 42000, end: int = 42999, used_ports: Optional[set[int]] = None) -> int:
-    used = used_ports or set()
-    for port in range(start, end + 1):
-        if port in used:
-            continue
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            try:
-                sock.bind(("0.0.0.0", port))
-                return port
-            except OSError:
-                continue
-    raise RuntimeError("No free port available in allocation range")
+def _tls_enabled() -> bool:
+    if _as_bool(os.getenv("XYN_TRAEFIK_ENABLE_TLS", "false")):
+        return True
+    return bool(str(os.getenv("XYN_TRAEFIK_ACME_EMAIL", "")).strip())
 
 
-def _compose_yaml(project: str, ui_port: int, api_port: int, *, ui_image: str, api_image: str) -> str:
+def _resolved_hosts(project: str) -> tuple[str, str]:
+    ui_override = str(os.getenv("XYN_LOCAL_UI_HOST", "")).strip()
+    api_override = str(os.getenv("XYN_LOCAL_API_HOST", "")).strip()
+    if ui_override and api_override:
+        return ui_override, api_override
+    base_domain = str(os.getenv("XYN_BASE_DOMAIN", "")).strip()
+    if base_domain and base_domain not in {"localhost", "127.0.0.1"}:
+        ui_host = ui_override or f"{project}.{base_domain}"
+        api_host = api_override or f"api.{project}.{base_domain}"
+        return ui_host, api_host
+    ui_host = ui_override or "localhost"
+    api_host = api_override or "localhost"
+    return ui_host, api_host
+
+
+def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, api_host: str) -> str:
+    traefik_network = str(os.getenv("XYN_TRAEFIK_NETWORK", "xyn_traefik")).strip() or "xyn_traefik"
+    resolver = str(os.getenv("XYN_TRAEFIK_CERT_RESOLVER", "letsencrypt")).strip() or "letsencrypt"
+    tls = _tls_enabled()
+    ui_scheme = "https" if tls else "http"
+    if ui_host == api_host:
+        api_rule = f"Host(`{ui_host}`) && (PathPrefix(`/xyn/api`) || PathPrefix(`/api`) || PathPrefix(`/auth`))"
+    else:
+        api_rule = (
+            f"Host(`{api_host}`) || "
+            f"(Host(`{ui_host}`) && (PathPrefix(`/xyn/api`) || PathPrefix(`/api`) || PathPrefix(`/auth`)))"
+        )
+    ui_rule = f"Host(`{ui_host}`)"
     return f"""services:
   db:
     image: postgres:16-alpine
@@ -98,6 +106,9 @@ def _compose_yaml(project: str, ui_port: int, api_port: int, *, ui_image: str, a
   backend:
     image: {api_image}
     restart: unless-stopped
+    networks:
+      - default
+      - traefik
     environment:
       DATABASE_URL: postgresql://xyn:xyn_dev_password@db:5432/xyn
       REDIS_URL: redis://redis:6379/0
@@ -107,8 +118,20 @@ def _compose_yaml(project: str, ui_port: int, api_port: int, *, ui_image: str, a
       XYN_OPENAI_API_KEY: ${{XYN_OPENAI_API_KEY:-}}
       XYN_GEMINI_API_KEY: ${{XYN_GEMINI_API_KEY:-}}
       XYN_ANTHROPIC_API_KEY: ${{XYN_ANTHROPIC_API_KEY:-}}
-    ports:
-      - "{api_port}:8000"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network={traefik_network}"
+      - "traefik.http.routers.{project}-api-http.rule={api_rule}"
+      - "traefik.http.routers.{project}-api-http.entrypoints=web"
+      - "traefik.http.routers.{project}-api-http.priority=200"
+      - "traefik.http.routers.{project}-api-http.service={project}-api-svc"
+      - "traefik.http.services.{project}-api-svc.loadbalancer.server.port=8000"
+      - "traefik.http.routers.{project}-api-https.rule={api_rule}"
+      - "traefik.http.routers.{project}-api-https.entrypoints=websecure"
+      - "traefik.http.routers.{project}-api-https.priority=200"
+      - "traefik.http.routers.{project}-api-https.service={project}-api-svc"
+      - "traefik.http.routers.{project}-api-https.tls={str(tls).lower()}"
+      - "traefik.http.routers.{project}-api-https.tls.certresolver={resolver}"
     depends_on:
       - db
       - redis
@@ -116,15 +139,35 @@ def _compose_yaml(project: str, ui_port: int, api_port: int, *, ui_image: str, a
   ui:
     image: {ui_image}
     restart: unless-stopped
+    networks:
+      - default
+      - traefik
     environment:
-      VITE_API_BASE_URL: http://localhost:{api_port}
-    ports:
-      - "{ui_port}:80"
+      VITE_API_BASE_URL: {ui_scheme}://{ui_host}/xyn/api
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network={traefik_network}"
+      - "traefik.http.routers.{project}-ui-http.rule={ui_rule}"
+      - "traefik.http.routers.{project}-ui-http.entrypoints=web"
+      - "traefik.http.routers.{project}-ui-http.priority=10"
+      - "traefik.http.routers.{project}-ui-http.service={project}-ui-svc"
+      - "traefik.http.services.{project}-ui-svc.loadbalancer.server.port=80"
+      - "traefik.http.routers.{project}-ui-https.rule={ui_rule}"
+      - "traefik.http.routers.{project}-ui-https.entrypoints=websecure"
+      - "traefik.http.routers.{project}-ui-https.priority=10"
+      - "traefik.http.routers.{project}-ui-https.service={project}-ui-svc"
+      - "traefik.http.routers.{project}-ui-https.tls={str(tls).lower()}"
+      - "traefik.http.routers.{project}-ui-https.tls.certresolver={resolver}"
     depends_on:
       - backend
 
 volumes:
   db_data:
+
+networks:
+  traefik:
+    external: true
+    name: {traefik_network}
 """
 
 
@@ -388,8 +431,9 @@ def _resolve_images_for_provision(request: ProvisionLocalRequest) -> dict[str, A
             "operations": operations,
         }
 
-    local_ui_context = str(os.getenv("XYN_LOCAL_UI_CONTEXT", "")).strip()
-    local_api_context = str(os.getenv("XYN_LOCAL_API_CONTEXT", "")).strip()
+    src_root = str(os.getenv("XYN_HOST_SRC_ROOT", "/home/ubuntu/src")).strip() or "/home/ubuntu/src"
+    local_ui_context = str(os.getenv("XYN_LOCAL_UI_CONTEXT", "")).strip() or str((Path(src_root) / "xyn-ui").resolve())
+    local_api_context = str(os.getenv("XYN_LOCAL_API_CONTEXT", "")).strip() or str((Path(src_root) / "xyn-api").resolve())
     local_contexts_ready = bool(local_ui_context and local_api_context)
     if local_contexts_ready and _context_has_dockerfile(local_ui_context) and _context_has_dockerfile(local_api_context):
         code, _, stderr = _run(["docker", "build", "-t", DEFAULT_API_IMAGE_NAME, local_api_context])
@@ -468,37 +512,22 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail={"message": str(exc)}) from exc
 
     up_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "up", "-d"]
-    down_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "down", "--remove-orphans"]
-    code = 1
-    stdout = ""
-    stderr = ""
-    ui_port = 0
-    api_port = 0
-    for attempt in range(5):
-        used_ports = _used_host_ports()
-        ui_port = _find_free_port(used_ports=used_ports)
-        used_ports.add(ui_port)
-        api_port = _find_free_port(start=ui_port + 1, used_ports=used_ports)
-        compose_yaml = _compose_yaml(
-            project=project,
-            ui_port=ui_port,
-            api_port=api_port,
-            ui_image=artifact_resolution["ui_image"],
-            api_image=artifact_resolution["api_image"],
-        )
-        compose_path.write_text(compose_yaml, encoding="utf-8")
-        code, stdout, stderr = _run(up_cmd, cwd=deploy_dir)
-        if code == 0:
-            break
-        if "port is already allocated" not in (stderr or "").lower():
-            break
-        _run(down_cmd, cwd=deploy_dir)
-        if attempt == 4:
-            break
+    ui_host, api_host = _resolved_hosts(project)
+    tls = _tls_enabled()
+    scheme = "https" if tls else "http"
+    compose_yaml = _compose_yaml(
+        project=project,
+        ui_image=artifact_resolution["ui_image"],
+        api_image=artifact_resolution["api_image"],
+        ui_host=ui_host,
+        api_host=api_host,
+    )
+    compose_path.write_text(compose_yaml, encoding="utf-8")
+    code, stdout, stderr = _run(up_cmd, cwd=deploy_dir)
     status = "succeeded" if code == 0 else "failed"
 
-    ui_url = f"http://localhost:{ui_port}"
-    api_url = f"http://localhost:{api_port}"
+    ui_url = f"{scheme}://{ui_host}"
+    api_url = f"{scheme}://{api_host}"
     deployment_payload: Dict[str, Any] = {
         "schema_version": "xyn.deployment.v1",
         "deployment_id": deployment_id,

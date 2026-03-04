@@ -1,6 +1,6 @@
 # Xyn Seed - Phase v0.0
 
-**Local-first, HTTP-only, minimal agent-native platform core**
+**Local-first, Traefik-ingressed, minimal agent-native platform core**
 
 Xyn Seed is a minimal platform that turns **events** into **plans** into **actions** with full **auditability**.
 
@@ -21,7 +21,7 @@ This is the **v0.0 implementation** - a local-first proof of concept demonstrati
 ## What's NOT Included in v0.0
 
 ❌ Authentication/authorization
-❌ DNS/ACME/TLS (HTTP-only on localhost)
+⚠ DNS/ACME/TLS depends on host DNS + ACME env configuration
 ❌ AWS integrations
 ❌ Vault/secrets management
 ❌ Federation/workcells
@@ -69,12 +69,18 @@ chmod +x xynctl
 
 This will:
 1. start the seed core stack
-2. pull platform artifacts from
+2. start Traefik ingress (`:80`, `:443`)
+3. pull platform artifacts from
 
    `public.ecr.aws/i0h0h0n4/xyn/artifacts`
 
-3. provision a sibling Xyn instance
-4. print the UI URL
+4. provision a sibling Xyn instance behind Traefik
+5. print final URLs
+
+Local default:
+- Seed API: `http://seed.localhost`
+- Sibling UI: `http://localhost`
+- Sibling API: `http://localhost/xyn/api`
 
 ## Artifact Registry (Managed Artifact)
 
@@ -101,6 +107,35 @@ Local dev override remains supported:
 
 - If both `XYN_LOCAL_API_CONTEXT` and `XYN_LOCAL_UI_CONTEXT` are set and contain Dockerfiles, seed builds and uses local images (`xyn-api`, `xyn-ui`).
 
+## TLS On A Host (Traefik + ACME)
+
+To enable automatic certs on a publicly reachable host:
+
+1. Point DNS to the host:
+- `${project}.${your_domain}` for UI (or set `XYN_LOCAL_UI_HOST`)
+- `api.${project}.${your_domain}` for API (or set `XYN_LOCAL_API_HOST`)
+- `seed.${your_domain}` (or set `XYN_SEED_HOST`)
+
+2. Configure `.env`:
+
+```bash
+XYN_BASE_DOMAIN=your_domain
+XYN_TRAEFIK_ENABLE_TLS=true
+XYN_TRAEFIK_ACME_EMAIL=you@example.com
+XYN_TRAEFIK_CERT_RESOLVER=letsencrypt
+# Optional:
+# XYN_TRAEFIK_ACME_CHALLENGE=dns
+# XYN_TRAEFIK_DNS_PROVIDER=route53
+```
+
+3. Run:
+
+```bash
+./xynctl quickstart
+```
+
+If ACME vars are not set, Traefik runs HTTP-only and quickstart still works.
+
 ### Kernel Artifact Loading (Phase 1)
 
 Seed kernel now defaults to legacy routes **OFF** and loads artifact roles dynamically.
@@ -117,7 +152,7 @@ XYN_KERNEL_MANIFEST_ROOTS=/home/ubuntu/src
 
 ### Create Your First Run
 
-1. Navigate to http://localhost:8000/ui/runs/new
+1. Navigate to `http://seed.localhost/ui/runs/new`
 2. Enter a run name (e.g., "My First Run")
 3. Click "Create & Execute Run"
 4. View the run detail page to see steps and events
@@ -192,6 +227,24 @@ XYN_KERNEL_MANIFEST_ROOTS=/home/ubuntu/src
 ./xynctl stop                     # Stop seed stack
 ./xynctl logs [svc]               # View logs (optionally for specific service)
 ./xynctl help                     # Show help
+```
+
+## Verify
+
+Local verify:
+
+```bash
+curl -sS http://seed.localhost/health
+curl -sS http://localhost/xyn/api/me
+open http://localhost
+```
+
+Host verify (TLS enabled):
+
+```bash
+curl -I https://$XYN_SEED_HOST/health
+curl -I https://$XYN_LOCAL_UI_HOST/
+curl -I https://$XYN_LOCAL_API_HOST/xyn/api/me
 ```
 
 ## Testing

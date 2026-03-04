@@ -1,4 +1,46 @@
 services:
+  traefik:
+    image: traefik:v2.11
+    container_name: xyn-traefik
+    restart: unless-stopped
+    command: >
+      /bin/sh -ec '
+      set -e;
+      RESOLVER="$${XYN_TRAEFIK_CERT_RESOLVER:-letsencrypt}";
+      ARGS="--providers.docker=true
+      --providers.docker.exposedbydefault=false
+      --entrypoints.web.address=:80
+      --entrypoints.websecure.address=:443
+      --api.dashboard=$${XYN_TRAEFIK_DASHBOARD:-false}
+      --accesslog=true";
+      if [ -n "$${XYN_TRAEFIK_ACME_EMAIL:-}" ]; then
+        ARGS="$${ARGS}
+        --certificatesresolvers.$${RESOLVER}.acme.email=$${XYN_TRAEFIK_ACME_EMAIL}
+        --certificatesresolvers.$${RESOLVER}.acme.storage=/letsencrypt/acme.json";
+        if [ "$${XYN_TRAEFIK_ACME_CHALLENGE:-http}" = "dns" ]; then
+          ARGS="$${ARGS}
+          --certificatesresolvers.$${RESOLVER}.acme.dnschallenge=true
+          --certificatesresolvers.$${RESOLVER}.acme.dnschallenge.provider=$${XYN_TRAEFIK_DNS_PROVIDER:-route53}";
+        else
+          ARGS="$${ARGS}
+          --certificatesresolvers.$${RESOLVER}.acme.httpchallenge=true
+          --certificatesresolvers.$${RESOLVER}.acme.httpchallenge.entrypoint=web";
+        fi;
+      fi;
+      exec traefik $${ARGS};
+      '
+    ports:
+      - "${XYN_TRAEFIK_WEB_PORT:-80}:80"
+      - "${XYN_TRAEFIK_WEBSECURE_PORT:-443}:443"
+    security_opt:
+      - label=disable
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:z
+      - letsencrypt_data:/letsencrypt
+    networks:
+      - default
+      - traefik
+
   postgres:
     image: postgres:16-alpine
     container_name: xyn-postgres
@@ -35,6 +77,10 @@ services:
       dockerfile: Dockerfile
     container_name: xyn-core
     restart: unless-stopped
+    security_opt:
+      - label=disable
+    group_add:
+      - "${DOCKER_GID:-0}"
     environment:
       XYN_ENV: ${XYN_ENV:-local}
       XYN_BASE_DOMAIN: ${XYN_BASE_DOMAIN:-${DOMAIN:-}}
@@ -50,7 +96,8 @@ services:
       XYN_API_BASE_URL: ${XYN_API_BASE_URL:-http://host.docker.internal:8000}
       XYN_KERNEL_WORKSPACE_ID: ${XYN_KERNEL_WORKSPACE_ID:-}
       XYN_INTERNAL_TOKEN: ${XYN_INTERNAL_TOKEN:-${XYENCE_INTERNAL_TOKEN:-}}
-      XYN_KERNEL_MANIFEST_ROOTS: ${XYN_KERNEL_MANIFEST_ROOTS:-/home/ubuntu/src}
+      XYN_HOST_SRC_ROOT: ${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}
+      XYN_KERNEL_MANIFEST_ROOTS: ${XYN_KERNEL_MANIFEST_ROOTS:-${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}}
       XYN_OIDC_ISSUER: ${XYN_OIDC_ISSUER:-}
       XYN_OIDC_CLIENT_ID: ${XYN_OIDC_CLIENT_ID:-}
       XYN_OIDC_REDIRECT_URI: ${XYN_OIDC_REDIRECT_URI:-}
@@ -66,23 +113,45 @@ services:
       ANTHROPIC_API_KEY: ${XYN_ANTHROPIC_API_KEY:-${ANTHROPIC_API_KEY:-}}
       ENV_ID: local-dev
       LOG_LEVEL: INFO
-    ports:
-      - "8001:8000"
+      XYN_CORE_RELOAD: ${XYN_CORE_RELOAD:-false}
+      XYN_AUTO_CREATE_SCHEMA: ${XYN_AUTO_CREATE_SCHEMA:-true}
     volumes:
-      - ./artifacts:/app/artifacts
-      - ./workspace:/app/workspace
-      - ./core:/app/core
-      - /home/ubuntu/src/xyn-api:/home/ubuntu/src/xyn-api:ro
-      - /home/ubuntu/src/xyn-ui:/home/ubuntu/src/xyn-ui:ro
-      - /home/ubuntu/src/artifacts:/home/ubuntu/src/artifacts:ro
-      - /home/ubuntu/src/xyn-contracts:/xyn-contracts:ro
-      - /var/run/docker.sock:/var/run/docker.sock
+      - ./artifacts:/app/artifacts:z
+      - ./workspace:/app/workspace:z
+      - ./core:/app/core:z
+      - ${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/xyn-api:${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/xyn-api:ro,z
+      - ${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/xyn-ui:${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/xyn-ui:ro,z
+      - ${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/artifacts:${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/artifacts:ro,z
+      - ${XYN_HOST_SRC_ROOT:-/home/ubuntu/src}/xyn-contracts:/xyn-contracts:ro,z
+      - /var/run/docker.sock:/var/run/docker.sock:z
     depends_on:
+      traefik:
+        condition: service_started
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: uvicorn core.main:app --host 0.0.0.0 --port 8000 --reload
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=${XYN_TRAEFIK_NETWORK:-xyn_traefik}"
+      - "traefik.http.routers.seed-http.rule=Host(`${XYN_SEED_HOST:-seed.localhost}`)"
+      - "traefik.http.routers.seed-http.entrypoints=web"
+      - "traefik.http.routers.seed-http.service=seed-svc"
+      - "traefik.http.services.seed-svc.loadbalancer.server.port=8000"
+      - "traefik.http.routers.seed-https.rule=Host(`${XYN_SEED_HOST:-seed.localhost}`)"
+      - "traefik.http.routers.seed-https.entrypoints=websecure"
+      - "traefik.http.routers.seed-https.service=seed-svc"
+      - "traefik.http.routers.seed-https.tls=${XYN_TRAEFIK_ENABLE_TLS:-false}"
+      - "traefik.http.routers.seed-https.tls.certresolver=${XYN_TRAEFIK_CERT_RESOLVER:-letsencrypt}"
+    networks:
+      - default
+      - traefik
+    command: /bin/sh -lc 'if [ "$${XYN_CORE_RELOAD:-false}" = "true" ]; then exec uvicorn core.main:app --host 0.0.0.0 --port 8000 --reload; else exec uvicorn core.main:app --host 0.0.0.0 --port 8000; fi'
 
 volumes:
   postgres_data:
+  letsencrypt_data:
+
+networks:
+  traefik:
+    name: ${XYN_TRAEFIK_NETWORK:-xyn_traefik}

@@ -231,6 +231,20 @@ def build_runtime_env() -> dict[str, str]:
     runtime = dict(os.environ)
     env_vars = normalize_ai_env(load_env())
     runtime.update(env_vars)
+    if not str(runtime.get("XYN_HOST_SRC_ROOT", "")).strip():
+        runtime["XYN_HOST_SRC_ROOT"] = str(Path.cwd().resolve().parent)
+    runtime.setdefault("XYN_TRAEFIK_NETWORK", "xyn_traefik")
+    runtime.setdefault("XYN_SEED_HOST", "seed.localhost")
+    if not str(runtime.get("XYN_SEED_URL", "")).strip():
+        seed_scheme = "https" if _as_bool(runtime.get("XYN_TRAEFIK_ENABLE_TLS", "false")) else "http"
+        runtime["XYN_SEED_URL"] = f"{seed_scheme}://{runtime['XYN_SEED_HOST']}"
+    if not str(runtime.get("DOCKER_GID", "")).strip():
+        sock = Path("/var/run/docker.sock")
+        if sock.exists():
+            try:
+                runtime["DOCKER_GID"] = str(sock.stat().st_gid)
+            except OSError:
+                pass
     return runtime
 
 
@@ -259,12 +273,13 @@ def _compose_up(detached: bool, env: dict[str, str]) -> bool:
     args = ["docker", "compose", "up", "--build"]
     if detached:
         args.append("-d")
-    try:
-        subprocess.run(args, check=True, env=env)
+    proc = subprocess.run(args, check=False, env=env, capture_output=True, text=True)
+    if proc.returncode == 0:
         return True
-    except subprocess.CalledProcessError as exc:
-        print_error(f"Failed to start platform: {exc}")
-        return False
+    print_error(f"Failed to start platform: Command '{' '.join(args)}' exited {proc.returncode}")
+    if proc.stderr.strip():
+        print_error(proc.stderr.strip())
+    return False
 
 
 def _wait_for_seed_health(seed_url: str, timeout_seconds: int = 120) -> bool:
@@ -517,31 +532,48 @@ def _deployment_states() -> list[dict[str, Any]]:
 
 
 def _discover_provisioned_instances_from_docker() -> list[dict[str, Any]]:
-    code, stdout, _ = _run_capture(["docker", "ps", "--format", "{{.Names}}|{{.Ports}}"])
+    code, stdout, _ = _run_capture(["docker", "ps", "--format", "{{.Names}}"])
     if code != 0:
         return []
-    discovered: dict[str, dict[str, Any]] = {}
-    for raw in (stdout or "").splitlines():
-        if "|" not in raw:
+    discovered: list[dict[str, Any]] = []
+    for name in (stdout or "").splitlines():
+        name = name.strip()
+        if not name:
             continue
-        name, ports = raw.split("|", 1)
-        if not name.startswith("xyn-") or name.startswith("xyn-core") or name.startswith("xyn-postgres") or name.startswith("xyn-redis"):
+        if not name.startswith("xyn-") or "-ui-" not in name:
             continue
-        match = re.match(r"^(xyn-[a-z0-9-]+)-(ui|backend)-\d+$", name)
+        match = re.match(r"^(xyn-[a-z0-9-]+)-ui-\d+$", name)
         if not match:
             continue
         project = match.group(1)
-        service = match.group(2)
-        entry = discovered.setdefault(project, {"compose_project": project})
-        if service == "ui":
-            ui_match = re.search(r"(?:0\.0\.0\.0|\[::\]):(\d+)->80/tcp", ports)
-            if ui_match:
-                entry["ui_url"] = f"http://localhost:{ui_match.group(1)}"
-        if service == "backend":
-            api_match = re.search(r"(?:0\.0\.0\.0|\[::\]):(\d+)->8000/tcp", ports)
-            if api_match:
-                entry["api_url"] = f"http://localhost:{api_match.group(1)}"
-    return [row for row in discovered.values() if row.get("ui_url") or row.get("api_url")]
+        code, labels_json, _ = _run_capture(["docker", "inspect", "--format", "{{json .Config.Labels}}", name])
+        if code != 0:
+            continue
+        try:
+            labels = json.loads(labels_json.strip() or "{}")
+        except json.JSONDecodeError:
+            continue
+        ui_rule = next((str(v) for k, v in labels.items() if k.startswith("traefik.http.routers.") and k.endswith("-ui-http.rule")), "")
+        api_rule = ""
+        backend_name = f"{project}-backend-1"
+        code_b, labels_backend_json, _ = _run_capture(["docker", "inspect", "--format", "{{json .Config.Labels}}", backend_name])
+        if code_b == 0:
+            try:
+                labels_backend = json.loads(labels_backend_json.strip() or "{}")
+                api_rule = next(
+                    (str(v) for k, v in labels_backend.items() if k.startswith("traefik.http.routers.") and k.endswith("-api-http.rule")),
+                    "",
+                )
+            except json.JSONDecodeError:
+                api_rule = ""
+        host_match = re.search(r"Host\(`([^`]+)`\)", ui_rule or api_rule)
+        api_host_match = re.search(r"Host\(`([^`]+)`\)", api_rule)
+        ui_url = f"http://{host_match.group(1)}" if host_match else ""
+        api_url = f"http://{api_host_match.group(1)}" if api_host_match else ""
+        if api_url and ui_url and api_url == ui_url:
+            api_url = f"{api_url}/xyn/api"
+        discovered.append({"compose_project": project, "ui_url": ui_url, "api_url": api_url})
+    return discovered
 
 
 def _run_capture(cmd: list[str]) -> tuple[int, str, str]:
@@ -623,8 +655,8 @@ def _write_deploy_execution(plan_path: Path, execution: dict) -> None:
 def main() -> None:
     args = _parse_args(sys.argv)
     cmd = args["command"]
-    seed_url = args["seed_url"] or "http://localhost:8001"
     env = build_runtime_env()
+    seed_url = args["seed_url"] or str(env.get("XYN_SEED_URL", "")).strip() or "http://seed.localhost"
 
     if cmd == "preflight":
         sys.exit(0 if preflight(args["skip_ai_keys"]) else 1)
