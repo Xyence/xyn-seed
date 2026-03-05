@@ -89,15 +89,16 @@ def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, 
         )
     ui_rule = f"Host(`{ui_host}`)"
     return f"""services:
-  db:
+  postgres:
     image: postgres:16-alpine
+    container_name: {project}-postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: xyn
       POSTGRES_USER: xyn
       POSTGRES_PASSWORD: xyn_dev_password
     volumes:
-      - db_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U xyn -d xyn"]
       interval: 5s
@@ -106,21 +107,23 @@ def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, 
 
   redis:
     image: redis:7-alpine
+    container_name: {project}-redis
     restart: unless-stopped
 
   backend:
     image: {api_image}
+    container_name: {project}-api
     restart: unless-stopped
     networks:
       - default
       - traefik
     environment:
-      DATABASE_URL: postgresql://xyn:xyn_dev_password@db:5432/xyn
+      DATABASE_URL: postgresql://xyn:xyn_dev_password@postgres:5432/xyn
       REDIS_URL: redis://redis:6379/0
       POSTGRES_DB: xyn
       POSTGRES_USER: xyn
       POSTGRES_PASSWORD: xyn_dev_password
-      POSTGRES_HOST: db
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       XYN_ENV: local
       XYN_AUTH_MODE: ${{XYN_AUTH_MODE:-dev}}
@@ -153,7 +156,7 @@ def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, 
       - "traefik.http.routers.{project}-api-https.tls={str(tls).lower()}"
       - "traefik.http.routers.{project}-api-https.tls.certresolver={resolver}"
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_started
@@ -162,16 +165,17 @@ def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, 
 
   migrate:
     image: {api_image}
+    container_name: {project}-migrate
     restart: "no"
     networks:
       - default
     environment:
-      DATABASE_URL: postgresql://xyn:xyn_dev_password@db:5432/xyn
+      DATABASE_URL: postgresql://xyn:xyn_dev_password@postgres:5432/xyn
       REDIS_URL: redis://redis:6379/0
       POSTGRES_DB: xyn
       POSTGRES_USER: xyn
       POSTGRES_PASSWORD: xyn_dev_password
-      POSTGRES_HOST: db
+      POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       XYN_ENV: local
       XYN_AUTH_MODE: ${{XYN_AUTH_MODE:-dev}}
@@ -207,13 +211,14 @@ def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, 
         PY
         exec python manage.py migrate --noinput
     depends_on:
-      db:
+      postgres:
         condition: service_healthy
       redis:
         condition: service_started
 
   ui:
     image: {ui_image}
+    container_name: {project}-ui
     restart: unless-stopped
     networks:
       - default
@@ -238,7 +243,7 @@ def _compose_yaml(project: str, *, ui_image: str, api_image: str, ui_host: str, 
       - backend
 
 volumes:
-  db_data:
+  postgres_data:
 
 networks:
   traefik:

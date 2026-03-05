@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlparse, urlunparse, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -68,6 +68,7 @@ def _parse_args(argv: list[str]) -> dict[str, Any]:
         "job_prompt": None,
         "repo_ref": None,
         "seed_url": None,
+        "attach": "--attach" in argv,
     }
     for idx, token in enumerate(argv):
         if token in {"--name", "--job-prompt", "--repo-ref", "--seed-url"}:
@@ -279,28 +280,84 @@ def _compose_up(detached: bool, env: dict[str, str]) -> bool:
     args = ["docker", "compose", "up", "--build"]
     if detached:
         args.append("-d")
-    proc = subprocess.run(args, check=False, env=env, capture_output=True, text=True)
+    proc = subprocess.run(
+        args,
+        check=False,
+        env=env,
+        capture_output=detached,
+        text=detached,
+    )
     if proc.returncode == 0:
         return True
     print_error(f"Failed to start platform: Command '{' '.join(args)}' exited {proc.returncode}")
-    if proc.stderr.strip():
+    if detached and proc.stderr and proc.stderr.strip():
         print_error(proc.stderr.strip())
     return False
 
 
-def _wait_for_seed_health(seed_url: str, timeout_seconds: int = 120) -> bool:
+def _seed_health_candidates(seed_url: str) -> list[tuple[str, dict[str, str]]]:
+    parsed = urlparse(seed_url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "seed.localhost"
+    port = parsed.port
+    netloc = host if port is None else f"{host}:{port}"
+    base_paths = ["/health", "/api/v1/health"]
+    candidates: list[tuple[str, dict[str, str]]] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def _add_candidate(target_host: str, headers: dict[str, str]) -> None:
+        candidate_netloc = target_host if port is None else f"{target_host}:{port}"
+        for path in base_paths:
+            key = (scheme, candidate_netloc, path)
+            if key in seen:
+                continue
+            seen.add(key)
+            url = urlunparse((scheme, candidate_netloc, path, "", "", ""))
+            candidates.append((url, headers))
+
+    _add_candidate(host, {})
+    if host.endswith(".localhost"):
+        host_header = netloc
+        _add_candidate("localhost", {"Host": host_header})
+        _add_candidate("127.0.0.1", {"Host": host_header})
+    return candidates
+
+
+def _wait_for_seed_health(seed_url: str, timeout_seconds: int = 120, show_progress: bool = False) -> bool:
     deadline = time.time() + timeout_seconds
-    health_url = f"{seed_url.rstrip('/')}/health"
+    candidates = _seed_health_candidates(seed_url)
+    next_progress_at = time.time() + 10
+    started_at = time.time()
     while time.time() < deadline:
-        try:
-            req = Request(health_url, method="GET")
-            with urlopen(req, timeout=5) as response:
-                if response.status == 200:
-                    return True
-        except Exception:
-            time.sleep(2)
-            continue
+        for health_url, headers in candidates:
+            try:
+                req = Request(health_url, method="GET", headers=headers)
+                with urlopen(req, timeout=5) as response:
+                    if response.status == 200:
+                        return True
+            except Exception:
+                continue
+        if show_progress and time.time() >= next_progress_at:
+            elapsed = int(time.time() - started_at)
+            print_info(f"Still waiting for seed API health ({elapsed}s elapsed)...")
+            next_progress_at = time.time() + 10
+        time.sleep(2)
     return False
+
+
+def _print_seed_health_debug(seed_url: str) -> None:
+    print_warning("Seed health check timed out. Debug info:")
+    print_warning("  - docker compose ps")
+    subprocess.run(["docker", "compose", "ps"], check=False)
+    print_warning("  - last 80 lines from xyn-core logs")
+    subprocess.run(["docker", "compose", "logs", "--tail", "80", "core"], check=False)
+    if seed_url.strip():
+        print_warning(f"  - health candidates from seed_url={seed_url}")
+        for candidate_url, headers in _seed_health_candidates(seed_url):
+            if headers:
+                print_warning(f"    * {candidate_url} (headers: {headers})")
+            else:
+                print_warning(f"    * {candidate_url}")
 
 
 def _docker_image_exists(image_ref: str) -> bool:
@@ -449,8 +506,9 @@ def start_with_provision(env: dict[str, str], *, force: bool, name: Optional[str
     if not start(detached=True, env=env):
         return 1
     print_info("Waiting for seed API health...")
-    if not _wait_for_seed_health(seed_url):
+    if not _wait_for_seed_health(seed_url, timeout_seconds=180, show_progress=True):
         print_error(f"Seed API did not become healthy at {seed_url}/health")
+        _print_seed_health_debug(seed_url)
         return 2
     print_success("Seed API is healthy")
     print_info("Resolving artifacts...")
@@ -790,8 +848,9 @@ def main() -> None:
             print_warning("Seed core does not appear healthy yet; starting core stack first...")
             if not start(detached=True, env=env):
                 sys.exit(2)
-            if not _wait_for_seed_health(seed_url):
+            if not _wait_for_seed_health(seed_url, timeout_seconds=180, show_progress=True):
                 print_error("Seed API is unavailable; cannot provision local instance")
+                _print_seed_health_debug(seed_url)
                 sys.exit(3)
         print_info("Resolving artifacts...")
         artifacts_ok, resolved = _resolve_artifacts_via_seed(seed_url, env)
@@ -833,7 +892,7 @@ def main() -> None:
         print("Xyn Seed Control Tool (xynctl)")
         print("\nUsage:")
         print("  ./xynctl preflight [--skip-ai-keys]")
-        print("  ./xynctl start [--non-interactive] [--provision] [--force] [--name <name>] [--job-prompt <text>] [--repo-ref <path>]")
+        print("  ./xynctl start [--attach] [--provision] [--force] [--name <name>] [--job-prompt <text>] [--repo-ref <path>]")
         print("  ./xynctl quickstart [--force] [--name <name>]    # alias for start --provision")
         print("  ./xynctl provision local [--force] [--name <name>] [--job-prompt <text>] [--repo-ref <path>]")
         print("  ./xynctl status")
@@ -861,7 +920,7 @@ def main() -> None:
                 seed_url=seed_url,
             )
         )
-    detached = bool(args["non_interactive"])
+    detached = bool(args["non_interactive"]) or not bool(args["attach"])
     ok = start(detached=detached, env=env)
     sys.exit(0 if ok else 2)
 
