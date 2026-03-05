@@ -22,6 +22,7 @@ This directory contains SQL migrations for the Xyn core schema.
 006_normalize_core_timestamps_timestamptz.sql - Normalize core timestamps to TIMESTAMPTZ
 007_artifact_registry.sql           - Artifact registry + workspace settings
 008_workspace_drafts_jobs_phase1.sql - Workspace-scoped drafts/jobs foundation
+009_locations_primitive.sql         - Shared workspace-scoped location primitive
 ```
 
 ## Migration Philosophy
@@ -84,7 +85,7 @@ XYN_REQUIRED_MIGRATIONS=001_initial_schema
 
 Strict mode (recommended for production):
 ```bash
-XYN_REQUIRED_MIGRATIONS=001_initial_schema,002_add_scheduling_and_priority,003_add_run_edges_for_dag,004_add_queue_claim_indexes,005_steps_run_idx_constraints,006_normalize_core_timestamps_timestamptz,007_artifact_registry,008_workspace_drafts_jobs_phase1
+XYN_REQUIRED_MIGRATIONS=001_initial_schema,002_add_scheduling_and_priority,003_add_run_edges_for_dag,004_add_queue_claim_indexes,005_steps_run_idx_constraints,006_normalize_core_timestamps_timestamptz,007_artifact_registry,008_workspace_drafts_jobs_phase1,009_locations_primitive
 ```
 
 This provides a "fail fast on boot" contract - the app will refuse to start if required migrations are missing.
@@ -97,7 +98,7 @@ SELECT id, applied_at FROM schema_migrations ORDER BY id;
 
 ## Creating New Migrations
 
-1. **Choose next number**: `006_your_feature.sql`
+1. **Choose next number**: `010_your_feature.sql`
 
 2. **Follow template**:
 ```sql

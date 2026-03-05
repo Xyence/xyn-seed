@@ -94,6 +94,7 @@ class Workspace(Base):
 
     drafts = relationship("Draft", back_populates="workspace")
     jobs = relationship("Job", back_populates="workspace")
+    locations = relationship("Location", back_populates="workspace")
 
 
 class Draft(Base):
@@ -135,6 +136,35 @@ class Job(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     workspace = relationship("Workspace", back_populates="jobs")
+
+
+class Location(Base):
+    """Reusable workspace-scoped location primitive."""
+    __tablename__ = "locations"
+    __table_args__ = (
+        Index("ix_locations_workspace_id", "workspace_id"),
+        Index("ix_locations_workspace_kind", "workspace_id", "kind"),
+        Index("ix_locations_workspace_parent", "workspace_id", "parent_location_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    name = Column(String(255), nullable=False)
+    kind = Column(String(64), nullable=False)
+    parent_location_id = Column(UUID(as_uuid=True), ForeignKey("locations.id"), nullable=True)
+    address_line1 = Column(String(255), nullable=True)
+    address_line2 = Column(String(255), nullable=True)
+    city = Column(String(255), nullable=True)
+    region = Column(String(255), nullable=True)
+    postal_code = Column(String(64), nullable=True)
+    country = Column(String(128), nullable=True)
+    notes = Column(Text, nullable=True)
+    tags_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = relationship("Workspace", back_populates="locations")
+    parent = relationship("Location", remote_side=[id], foreign_keys=[parent_location_id])
 
 
 class Run(Base):

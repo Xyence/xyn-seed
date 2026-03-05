@@ -14,9 +14,12 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 from core import __version__
 from core.ai_bootstrap import ensure_default_agent_via_api
+from core.app_jobs import AppJobWorkerHandle, start_app_job_worker, stop_app_job_worker
 from core.artifact_registry import ensure_seed_default_registry
 from core.api.drafts import router as drafts_router
 from core.api.jobs import router as jobs_router
+from core.api.locations import router as locations_router
+from core.api.primitives import router as primitives_router
 from core.provisioning_local import router as provisioning_router
 from core.database import init_db
 from core.database import SessionLocal
@@ -74,6 +77,10 @@ async def _lifespan(app: FastAPI):
     finally:
         db.close()
     ensure_default_agent_via_api()
+    app_job_worker: AppJobWorkerHandle | None = None
+    if os.getenv("XYN_APP_JOB_WORKER_ENABLED", "true").strip().lower() in {"1", "true", "yes"}:
+        app_job_worker = start_app_job_worker()
+        logger.info("app-intent job worker started")
 
     loaded = await load_workspace_artifacts_into_app(app)
     logger.info("kernel loaded %d artifact(s)", len(loaded))
@@ -92,6 +99,7 @@ async def _lifespan(app: FastAPI):
             await reconciler_task
         except Exception:
             pass
+    stop_app_job_worker(app_job_worker)
     logger.info("shutting down xyn-seed kernel")
 
 
@@ -136,6 +144,8 @@ def create_app() -> FastAPI:
     app.include_router(artifact_registry_router)
     app.include_router(drafts_router, prefix="/api/v1", tags=["Drafts"])
     app.include_router(jobs_router, prefix="/api/v1", tags=["Jobs"])
+    app.include_router(locations_router, prefix="/api/v1", tags=["Locations"])
+    app.include_router(primitives_router, prefix="/api/v1", tags=["Primitives"])
 
     return app
 

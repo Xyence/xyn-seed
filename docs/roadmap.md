@@ -9,6 +9,11 @@ Scope:
 - Workspace-scoped jobs (`generate_app_spec`, `deploy_app_local`, `smoke_test`) with status + logs.
 - Submit flow: draft -> queued job.
 - Seed defaults: guaranteed default workspace bootstrap.
+- Drafts UI in xyn-ui for create/edit/submit + jobs visibility.
+- AppSpec v0 generation and persistence as job output/artifact.
+- Shared primitive catalog with reusable `location` primitive.
+- Local net-inventory materialization via docker-compose.
+- Sibling Xyn provisioning + smoke-test execution against deployed app.
 
 Outcomes:
 - API-first workflow for "build an app" intake.

@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://xyn.local/schemas/appspec_v0.schema.json",
+  "title": "Xyn AppSpec v0",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "app_slug",
+    "title",
+    "workspace_id",
+    "services",
+    "data",
+    "reports"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "xyn.appspec.v0"
+    },
+    "app_slug": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workspace_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "image",
+          "env",
+          "ports",
+          "depends_on"
+        ],
+        "properties": {
+          "name": {"type": "string"},
+          "image": {"type": "string"},
+          "env": {"type": "object"},
+          "ports": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["container", "host", "protocol"],
+              "properties": {
+                "container": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "host": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "protocol": {"type": "string", "enum": ["tcp", "udp"]}
+              }
+            }
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "ingress": {
+      "type": "object"
+    },
+    "data": {
+      "type": "object",
+      "required": ["postgres"],
+      "properties": {
+        "postgres": {
+          "type": "object"
+        }
+      }
+    },
+    "reports": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "requires_primitives": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}
