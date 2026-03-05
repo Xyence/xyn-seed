@@ -19,6 +19,9 @@ This directory contains SQL migrations for the Xyn core schema.
 003_add_run_edges_for_dag.sql       - Phase 2: DAG execution (parent/child)
 004_add_queue_claim_indexes.sql     - Production: Claim query optimization
 005_steps_run_idx_constraints.sql   - Production: Step ordering constraints
+006_normalize_core_timestamps_timestamptz.sql - Normalize core timestamps to TIMESTAMPTZ
+007_artifact_registry.sql           - Artifact registry + workspace settings
+008_workspace_drafts_jobs_phase1.sql - Workspace-scoped drafts/jobs foundation
 ```
 
 ## Migration Philosophy
@@ -81,7 +84,7 @@ XYN_REQUIRED_MIGRATIONS=001_initial_schema
 
 Strict mode (recommended for production):
 ```bash
-XYN_REQUIRED_MIGRATIONS=001_initial_schema,002_add_scheduling_and_priority,003_add_run_edges_for_dag,004_add_queue_claim_indexes,005_steps_run_idx_constraints
+XYN_REQUIRED_MIGRATIONS=001_initial_schema,002_add_scheduling_and_priority,003_add_run_edges_for_dag,004_add_queue_claim_indexes,005_steps_run_idx_constraints,006_normalize_core_timestamps_timestamptz,007_artifact_registry,008_workspace_drafts_jobs_phase1
 ```
 
 This provides a "fail fast on boot" contract - the app will refuse to start if required migrations are missing.

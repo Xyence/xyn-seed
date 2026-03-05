@@ -218,12 +218,14 @@ class ArtifactListResponse(BaseModel):
 class Draft(BaseModel):
     """Draft response model."""
     draft_id: UUID = Field(alias="id")
-    name: str
-    kind: str
+    workspace_id: UUID
+    type: str
+    title: str
     status: str
+    created_by: str
     created_at: datetime
     updated_at: datetime
-    content: Dict[str, Any] = Field(default_factory=dict)
+    content_json: Dict[str, Any] = Field(default_factory=dict)
 
     class Config:
         from_attributes = True
@@ -234,12 +236,14 @@ class Draft(BaseModel):
         """Convert ORM model to schema."""
         return cls(
             id=draft.id,
-            name=draft.name,
-            kind=draft.kind,
-            status=draft.status.value,
+            workspace_id=draft.workspace_id,
+            type=draft.type,
+            title=draft.title,
+            status=draft.status,
+            created_by=draft.created_by,
             created_at=draft.created_at,
             updated_at=draft.updated_at,
-            content=draft.definition or {}
+            content_json=draft.content_json or {}
         )
 
 

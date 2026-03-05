@@ -31,8 +31,17 @@ class StepStatus(str, enum.Enum):
 class DraftStatus(str, enum.Enum):
     """Draft status."""
     DRAFT = "draft"
-    VALIDATED = "validated"
-    PROMOTED = "promoted"
+    READY = "ready"
+    SUBMITTED = "submitted"
+    ARCHIVED = "archived"
+
+
+class JobStatus(str, enum.Enum):
+    """Job status."""
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
 
 
 class Event(Base):
@@ -73,24 +82,59 @@ class Blueprint(Base):
     runs = relationship("Run", back_populates="blueprint")
 
 
-class Draft(Base):
-    """Draft model - working versions of blueprints/packs."""
-    __tablename__ = "drafts"
+class Workspace(Base):
+    """Workspace model."""
+    __tablename__ = "workspaces"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), nullable=False, index=True)
-    kind = Column(String(50), nullable=False)  # blueprint, pack
-    trigger_event_type = Column(String(255), nullable=True)
-    definition = Column(JSON, nullable=False)
-    status = Column(Enum(DraftStatus), nullable=False, default=DraftStatus.DRAFT, index=True)
-    notes = Column(Text, nullable=True)
-    source_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True)
-    revision = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    slug = Column(String(255), nullable=False, unique=True, index=True)
+    title = Column(String(255), nullable=False, default="Default Workspace")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    # Relationships
-    source_run = relationship("Run", foreign_keys=[source_run_id])
+    drafts = relationship("Draft", back_populates="workspace")
+    jobs = relationship("Job", back_populates="workspace")
+
+
+class Draft(Base):
+    """Draft model - NL intent and app spec drafts."""
+    __tablename__ = "drafts"
+    __table_args__ = (
+        Index("ix_drafts_workspace_id", "workspace_id"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    type = Column(String(100), nullable=False, default="app_intent")
+    title = Column(String(255), nullable=False)
+    content_json = Column(JSON, nullable=False, default=dict)
+    status = Column(String(32), nullable=False, default=DraftStatus.DRAFT.value, index=True)
+    created_by = Column(String(255), nullable=False, default="system")
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = relationship("Workspace", back_populates="drafts")
+
+
+class Job(Base):
+    """Job model for draft submit/generation/deploy workflows."""
+    __tablename__ = "jobs"
+    __table_args__ = (
+        Index("ix_jobs_workspace_id", "workspace_id"),
+        Index("ix_jobs_status", "status"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=False)
+    type = Column(String(100), nullable=False)
+    status = Column(String(32), nullable=False, default=JobStatus.QUEUED.value)
+    input_json = Column(JSON, nullable=False, default=dict)
+    output_json = Column(JSON, nullable=True)
+    logs_text = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = relationship("Workspace", back_populates="jobs")
 
 
 class Run(Base):

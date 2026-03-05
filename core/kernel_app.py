@@ -15,12 +15,15 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from core import __version__
 from core.ai_bootstrap import ensure_default_agent_via_api
 from core.artifact_registry import ensure_seed_default_registry
+from core.api.drafts import router as drafts_router
+from core.api.jobs import router as jobs_router
 from core.provisioning_local import router as provisioning_router
 from core.database import init_db
 from core.database import SessionLocal
 from core.env_config import export_runtime_env, load_seed_config
 from core.kernel_loader import load_workspace_artifacts_into_app
 from core.api.artifact_registries import router as artifact_registry_router
+from core.workspaces import ensure_default_workspace
 
 
 class CorrelationIdFilter(logging.Filter):
@@ -66,6 +69,7 @@ async def _lifespan(app: FastAPI):
     init_db()
     db = SessionLocal()
     try:
+        ensure_default_workspace(db)
         ensure_seed_default_registry(db)
     finally:
         db.close()
@@ -130,6 +134,8 @@ def create_app() -> FastAPI:
 
     app.include_router(provisioning_router)
     app.include_router(artifact_registry_router)
+    app.include_router(drafts_router, prefix="/api/v1", tags=["Drafts"])
+    app.include_router(jobs_router, prefix="/api/v1", tags=["Jobs"])
 
     return app
 

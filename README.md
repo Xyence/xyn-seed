@@ -229,6 +229,25 @@ XYN_KERNEL_MANIFEST_ROOTS=/home/ubuntu/src
 - `GET /api/v1/artifacts/{id}` - Get artifact metadata
 - `GET /api/v1/artifacts/{id}/download` - Download artifact
 
+### Drafts (workspace scoped)
+
+- `POST /api/v1/drafts` - Create draft
+- `GET /api/v1/drafts` - List drafts
+- `GET /api/v1/drafts/{id}` - Get draft
+- `PATCH /api/v1/drafts/{id}` - Update draft
+- `POST /api/v1/drafts/{id}/submit` - Mark submitted + enqueue job
+
+### Jobs (workspace scoped)
+
+- `GET /api/v1/jobs` - List jobs
+- `GET /api/v1/jobs/{id}` - Get job
+- `PATCH /api/v1/jobs/{id}` - Update job status/output/logs
+- `GET /api/v1/jobs/{id}/logs` - Fetch job logs text
+
+Workspace context is required for draft/job endpoints. Provide one of:
+- Query param: `workspace_id=<uuid>` or `workspace_slug=default`
+- Header: `X-Workspace-Id: <uuid>` or `X-Workspace-Slug: default`
+
 ## xynctl Commands
 
 ```bash

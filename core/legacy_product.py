@@ -10,7 +10,7 @@ import logging
 import os
 from fastapi import FastAPI
 
-from core.api import artifacts, debug, domain, drafts, events, health, ops, packs, releases, runs
+from core.api import artifacts, debug, domain, events, health, ops, packs, releases, runs
 from core.middleware import CorrelationIdMiddleware
 from core.ui import ui_artifacts, ui_domain, ui_events, ui_runs
 
@@ -25,7 +25,6 @@ def register_legacy_product_routes(app: FastAPI) -> asyncio.Task | None:
     app.include_router(events.router, prefix="/api/v1", tags=["Events"])
     app.include_router(runs.router, prefix="/api/v1", tags=["Runs"])
     app.include_router(artifacts.router, prefix="/api/v1", tags=["Artifacts"])
-    app.include_router(drafts.router, prefix="/api/v1", tags=["Drafts"])
     app.include_router(packs.router, prefix="/api/v1", tags=["Packs"])
     app.include_router(debug.router, prefix="/api/v1", tags=["Debug"])
     app.include_router(domain.router, prefix="/api/v1", tags=["Domain"])
