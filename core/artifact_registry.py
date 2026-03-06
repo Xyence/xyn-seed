@@ -285,12 +285,15 @@ def _run(cmd: list[str]) -> tuple[int, str, str]:
 
 
 def pull_if_missing(image_ref: str) -> str:
+    force_pull = str(os.getenv("XYN_ARTIFACT_FORCE_PULL", "true")).strip().lower() in {"1", "true", "yes", "on"}
     inspect_code, _, _ = _run(["docker", "image", "inspect", image_ref])
-    if inspect_code == 0:
+    if not force_pull and inspect_code == 0:
         return f"Using cached artifact image {image_ref}"
 
     code, _, _ = _run(["docker", "pull", image_ref])
     if code != 0:
+        if inspect_code == 0:
+            return f"Using cached artifact image {image_ref} (pull failed)"
         raise RuntimeError(
             "Unable to pull artifact image:\n"
             f"{image_ref}\n\n"

@@ -424,7 +424,20 @@ def _resolve_artifacts(env: dict[str, str]) -> tuple[bool, dict[str, str]]:
         resolved["ui_image"] = DEFAULT_UI_IMAGE_NAME
         return True, resolved
 
+    force_pull = _as_bool(str(env.get("XYN_ARTIFACT_FORCE_PULL", "true")))
     for image_ref in (resolved["api_image"], resolved["ui_image"]):
+        should_pull = force_pull or image_ref.endswith(":dev")
+        if should_pull:
+            print_info("Pulling artifact:")
+            print(image_ref)
+            code, _, _ = _run_capture(["docker", "pull", image_ref])
+            if code != 0:
+                if _docker_image_exists(image_ref):
+                    print_warning(f"Pull failed for {image_ref}; falling back to cached local image")
+                    continue
+                _print_pull_error(image_ref)
+                return False, resolved
+            continue
         if _docker_image_exists(image_ref):
             print_info(f"Using cached artifact image {image_ref}")
             continue
