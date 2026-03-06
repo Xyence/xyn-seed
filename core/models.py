@@ -95,6 +95,7 @@ class Workspace(Base):
     drafts = relationship("Draft", back_populates="workspace")
     jobs = relationship("Job", back_populates="workspace")
     locations = relationship("Location", back_populates="workspace")
+    palette_commands = relationship("PaletteCommand", back_populates="workspace")
 
 
 class Draft(Base):
@@ -165,6 +166,26 @@ class Location(Base):
 
     workspace = relationship("Workspace", back_populates="locations")
     parent = relationship("Location", remote_side=[id], foreign_keys=[parent_location_id])
+
+
+class PaletteCommand(Base):
+    """Workspace/global palette command registry entries."""
+    __tablename__ = "palette_commands"
+    __table_args__ = (
+        Index("ix_palette_commands_workspace_id", "workspace_id"),
+        Index("ix_palette_commands_workspace_command", "workspace_id", "command_key"),
+        CheckConstraint("handler_type <> ''", name="ck_palette_commands_handler_type_nonempty"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id = Column(UUID(as_uuid=True), ForeignKey("workspaces.id"), nullable=True)
+    command_key = Column(String(255), nullable=False)
+    handler_type = Column(String(64), nullable=False, default="http_json")
+    handler_config_json = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workspace = relationship("Workspace", back_populates="palette_commands")
 
 
 class Run(Base):

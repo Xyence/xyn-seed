@@ -1,8 +1,9 @@
-"""Phase-1 app-intent job worker pipeline.
+"""Phase-2 app-intent pipeline worker.
 
 Executes queued jobs:
 - generate_app_spec
 - deploy_app_local
+- provision_sibling_xyn
 - smoke_test
 """
 from __future__ import annotations
@@ -13,27 +14,29 @@ import subprocess
 import threading
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+
 from fastapi import HTTPException
 from jsonschema import ValidationError, validate
 from sqlalchemy.orm import Session
 
 from core.database import SessionLocal
 from core.models import Artifact, Job, JobStatus, Workspace
+from core.palette_engine import execute_palette_prompt
 from core.primitives import get_primitive_catalog
 from core.provisioning_local import ProvisionLocalRequest, provision_local_instance
 
-
 POLL_SECONDS = float(os.getenv("XYN_APP_JOB_POLL_SECONDS", "2.0"))
 HTTP_TIMEOUT_SECONDS = int(os.getenv("XYN_APP_JOB_HTTP_TIMEOUT", "10"))
-APP_DEPLOY_HEALTH_TIMEOUT_SECONDS = int(os.getenv("XYN_APP_DEPLOY_HEALTH_TIMEOUT_SECONDS", "240"))
+APP_DEPLOY_HEALTH_TIMEOUT_SECONDS = int(os.getenv("XYN_APP_DEPLOY_HEALTH_TIMEOUT_SECONDS", "180"))
 COMMAND_TIMEOUT_SECONDS = int(os.getenv("XYN_APP_JOB_COMMAND_TIMEOUT_SECONDS", "240"))
-SMOKE_SIBLING_TIMEOUT_SECONDS = int(os.getenv("XYN_SMOKE_SIBLING_TIMEOUT_SECONDS", "300"))
 APPSPEC_SCHEMA_PATH = Path(__file__).resolve().parent / "contracts" / "appspec_v0.schema.json"
+NET_INVENTORY_IMAGE = str(
+    os.getenv("XYN_NET_INVENTORY_IMAGE", "public.ecr.aws/i0h0h0n4/xyn/artifacts/net-inventory-api:dev")
+).strip()
 
 
 def _utc_now() -> datetime:
@@ -50,15 +53,14 @@ def _safe_slug(value: str, *, default: str = "app") -> str:
     return collapsed or default
 
 
-def _deployments_root() -> Path:
-    workspace_root = Path(os.getenv("XYNSEED_WORKSPACE", "/app/workspace"))
-    root = Path(os.getenv("XYN_LOCAL_APP_DEPLOYMENTS_ROOT", str(workspace_root / "app_deployments"))).resolve()
+def _workspace_root() -> Path:
+    root = Path(os.getenv("XYN_LOCAL_WORKSPACE_ROOT", os.getenv("XYNSEED_WORKSPACE", "/app/workspace"))).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 
 
-def _workspace_root() -> Path:
-    root = Path(os.getenv("XYN_LOCAL_WORKSPACE_ROOT", os.getenv("XYNSEED_WORKSPACE", "/app/workspace"))).resolve()
+def _deployments_root() -> Path:
+    root = _workspace_root() / "app_deployments"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -80,7 +82,14 @@ def _run(cmd: list[str], *, cwd: Optional[Path] = None) -> tuple[int, str, str]:
     return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
 
 
-def _container_http_json(container_name: str, method: str, path: str, payload: Optional[dict[str, Any]] = None) -> tuple[int, dict[str, Any], str]:
+def _container_http_json(
+    container_name: str,
+    method: str,
+    path: str,
+    *,
+    port: int,
+    payload: Optional[dict[str, Any]] = None,
+) -> tuple[int, dict[str, Any], str]:
     script = f"""
 import json
 import urllib.error
@@ -88,12 +97,12 @@ import urllib.request
 
 method = {method!r}
 path = {path!r}
-payload = {json.dumps(payload or {})!r}
-url = "http://localhost:8080" + path
+payload = {payload or {}!r}
+url = "http://localhost:{port}" + path
 data = None
 headers = {{"Content-Type": "application/json"}}
 if method in ("POST", "PUT", "PATCH"):
-    data = payload.encode("utf-8")
+    data = json.dumps(payload).encode("utf-8")
 req = urllib.request.Request(url, method=method, headers=headers, data=data)
 try:
     with urllib.request.urlopen(req, timeout={HTTP_TIMEOUT_SECONDS}) as resp:
@@ -132,10 +141,10 @@ except Exception as exc:
     return code, body_json, raw_body
 
 
-def _wait_for_container_http_ok(container_name: str, path: str, *, timeout_seconds: int = 60) -> bool:
+def _wait_for_container_http_ok(container_name: str, path: str, *, port: int, timeout_seconds: int = 60) -> bool:
     deadline = time.time() + timeout_seconds
     while time.time() < deadline:
-        code, _, _ = _container_http_json(container_name, "GET", path)
+        code, _, _ = _container_http_json(container_name, "GET", path, port=port)
         if code == 200:
             return True
         time.sleep(2)
@@ -183,10 +192,12 @@ def _persist_json_artifact(
 
 def _build_app_spec(*, workspace_id: uuid.UUID, title: str, raw_prompt: str) -> dict[str, Any]:
     prompt = raw_prompt.lower()
+    mentions_inventory = any(token in prompt for token in ("inventory", "device", "devices", "network"))
+    app_slug = "net-inventory" if mentions_inventory else _safe_slug(title, default="net-inventory")
     requires_primitives: list[str] = []
-    if any(token in prompt for token in ("location", "address", "site", "rack", "closet")):
+    if any(token in prompt for token in ("location", "address", "site", "rack", "closet", "building", "room")):
         requires_primitives.append("location")
-    app_slug = "net-inventory" if "network" in raw_prompt.lower() and "inventory" in raw_prompt.lower() else _safe_slug(title, default="net-inventory")
+
     spec = {
         "schema_version": "xyn.appspec.v0",
         "app_slug": app_slug,
@@ -195,15 +206,12 @@ def _build_app_spec(*, workspace_id: uuid.UUID, title: str, raw_prompt: str) -> 
         "services": [
             {
                 "name": "net-inventory-api",
-                "image": "python:3.11-alpine",
+                "image": NET_INVENTORY_IMAGE,
                 "env": {
-                    "APP_ENV": "local",
                     "PORT": "8080",
                     "DATABASE_URL": "postgresql://xyn:xyn_dev_password@net-inventory-db:5432/net_inventory",
                 },
-                "ports": [
-                    {"container": 8080, "host": 18080, "protocol": "tcp"},
-                ],
+                "ports": [{"container": 8080, "host": 0, "protocol": "tcp"}],
                 "depends_on": ["net-inventory-db"],
             },
             {
@@ -214,19 +222,13 @@ def _build_app_spec(*, workspace_id: uuid.UUID, title: str, raw_prompt: str) -> 
                     "POSTGRES_USER": "xyn",
                     "POSTGRES_PASSWORD": "xyn_dev_password",
                 },
-                "ports": [
-                    {"container": 5432, "host": 15432, "protocol": "tcp"},
-                ],
+                "ports": [{"container": 5432, "host": 0, "protocol": "tcp"}],
                 "depends_on": [],
             },
         ],
         "ingress": {"enabled": False},
         "data": {"postgres": {"required": True, "service": "net-inventory-db"}},
-        "reports": [
-            "device_count_by_workspace",
-            "devices_by_vendor",
-            "stale_device_last_seen",
-        ],
+        "reports": ["devices_by_status"],
         "source_prompt": raw_prompt,
     }
     if requires_primitives:
@@ -234,12 +236,10 @@ def _build_app_spec(*, workspace_id: uuid.UUID, title: str, raw_prompt: str) -> 
     return spec
 
 
-def _ports_yaml(ports: list[dict[str, Any]], *, host_port_override: Optional[int] = None) -> list[str]:
+def _ports_yaml(ports: list[dict[str, Any]]) -> list[str]:
     lines: list[str] = []
-    for idx, port in enumerate(ports):
+    for port in ports:
         host_port = int(port.get("host") or 0)
-        if idx == 0 and host_port_override is not None:
-            host_port = host_port_override
         container_port = int(port.get("container") or 0)
         protocol = str(port.get("protocol") or "tcp").strip().lower()
         if protocol not in {"tcp", "udp"}:
@@ -258,79 +258,23 @@ def _resolve_published_port(container_name: str, target: str) -> int:
     return int(first.rsplit(":", 1)[1])
 
 
-def _materialize_net_inventory_compose(
-    *,
-    app_spec: dict[str, Any],
-    deployment_dir: Path,
-    app_port: int,
-    compose_project: str,
-) -> Path:
+def _docker_container_running(container_name: str) -> bool:
+    code, stdout, _ = _run(["docker", "inspect", "-f", "{{.State.Running}}", container_name])
+    return code == 0 and stdout.strip().lower() == "true"
+
+
+def _materialize_net_inventory_compose(*, app_spec: dict[str, Any], deployment_dir: Path, compose_project: str) -> Path:
     app_service = next((row for row in app_spec.get("services", []) if row.get("name") == "net-inventory-api"), {})
-    app_ports = _ports_yaml(
-        list(app_service.get("ports") or [{"host": 0, "container": 8080, "protocol": "tcp"}]),
-        host_port_override=0,
-    )
-
-    server_script = """import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-devices = []
-
-
-class Handler(BaseHTTPRequestHandler):
-    def _write_json(self, status, payload):
-        body = json.dumps(payload).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        if self.path == "/health":
-            self._write_json(200, {"status": "ok"})
-            return
-        if self.path == "/devices":
-            self._write_json(200, {"items": devices})
-            return
-        self._write_json(404, {"error": "not_found"})
-
-    def do_POST(self):
-        if self.path != "/devices":
-            self._write_json(404, {"error": "not_found"})
-            return
-        content_len = int(self.headers.get("Content-Length", "0"))
-        raw = self.rfile.read(content_len) if content_len else b"{}"
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except Exception:
-            self._write_json(400, {"error": "invalid_json"})
-            return
-        if not isinstance(payload, dict):
-            self._write_json(400, {"error": "invalid_payload"})
-            return
-        devices.append(payload)
-        self._write_json(200, payload)
-
-
-if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", 8080), Handler)
-    server.serve_forever()
-"""
-    inline_command = (
-        "cat >/tmp/server.py <<'PY'\n"
-        f"{server_script}"
-        "PY\n"
-        "python /tmp/server.py"
-    )
-
+    db_service = next((row for row in app_spec.get("services", []) if row.get("name") == "net-inventory-db"), {})
+    app_image = str(app_service.get("image") or NET_INVENTORY_IMAGE)
+    app_ports = _ports_yaml(list(app_service.get("ports") or [{"host": 0, "container": 8080, "protocol": "tcp"}]))
     compose = deployment_dir / "docker-compose.yml"
     compose.write_text(
         "\n".join(
             [
                 "services:",
                 "  net-inventory-db:",
-                "    image: postgres:16-alpine",
+                f"    image: {db_service.get('image') or 'postgres:16-alpine'}",
                 f"    container_name: {compose_project}-db",
                 "    restart: unless-stopped",
                 "    environment:",
@@ -344,16 +288,10 @@ if __name__ == "__main__":
                 "      retries: 20",
                 "",
                 "  net-inventory-api:",
-                "    image: python:3.11-alpine",
+                f"    image: {app_image}",
                 f"    container_name: {compose_project}-api",
                 "    restart: unless-stopped",
-                "    working_dir: /app",
-                "    command:",
-                "      - /bin/sh",
-                "      - -lc",
-                f"      - |-\n        {inline_command.replace(chr(10), chr(10) + '        ')}",
                 "    environment:",
-                "      APP_ENV: local",
                 "      PORT: \"8080\"",
                 "      DATABASE_URL: postgresql://xyn:xyn_dev_password@net-inventory-db:5432/net_inventory",
                 "    ports:",
@@ -375,16 +313,16 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
     title = str(payload.get("title") or "Network Inventory").strip() or "Network Inventory"
     content = payload.get("content_json") if isinstance(payload.get("content_json"), dict) else {}
     raw_prompt = str(content.get("raw_prompt") or payload.get("raw_prompt") or title).strip()
-    _append_job_log(logs, f"Generating AppSpec from prompt: {raw_prompt}")
     primitive_catalog = get_primitive_catalog()
     _append_job_log(logs, f"Loaded primitive catalog ({len(primitive_catalog)} entries)")
+    _append_job_log(logs, f"Generating AppSpec from prompt: {raw_prompt}")
+
     app_spec = _build_app_spec(workspace_id=job.workspace_id, title=title, raw_prompt=raw_prompt)
-    schema = _load_appspec_schema()
     try:
-        validate(instance=app_spec, schema=schema)
+        validate(instance=app_spec, schema=_load_appspec_schema())
     except ValidationError as exc:
         raise RuntimeError(f"AppSpec validation failed: {exc.message}") from exc
-    _append_job_log(logs, f"AppSpec validated against schema: {APPSPEC_SCHEMA_PATH.name}")
+
     artifact_id = _persist_json_artifact(
         db,
         workspace_id=job.workspace_id,
@@ -394,6 +332,13 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
         metadata={"job_id": str(job.id)},
     )
     _append_job_log(logs, f"Persisted AppSpec artifact: {artifact_id}")
+
+    selected_images = {svc.get("name"): svc.get("image") for svc in app_spec.get("services", []) if isinstance(svc, dict)}
+    selected_ports = {
+        svc.get("name"): svc.get("ports")
+        for svc in app_spec.get("services", [])
+        if isinstance(svc, dict)
+    }
     follow_up = [
         {
             "type": "deploy_app_local",
@@ -404,12 +349,18 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
             },
         }
     ]
-    return {
-        "app_spec": app_spec,
-        "app_spec_artifact_id": artifact_id,
-        "app_spec_schema": "xyn.appspec.v0",
-        "primitive_catalog": primitive_catalog,
-    }, follow_up
+    return (
+        {
+            "app_spec": app_spec,
+            "app_spec_artifact_id": artifact_id,
+            "app_spec_schema": "xyn.appspec.v0",
+            "primitive_catalog": primitive_catalog,
+            "selected_images": selected_images,
+            "selected_ports": selected_ports,
+            "derived_urls": {"seed_ui": "http://localhost", "seed_api": "http://seed.localhost"},
+        },
+        follow_up,
+    )
 
 
 def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -420,13 +371,9 @@ def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[di
     deployment_dir = _deployments_root() / app_slug / stamp
     deployment_dir.mkdir(parents=True, exist_ok=True)
     compose_project = _safe_slug(f"xyn-app-{app_slug}-{str(job.id)[:8]}", default="xyn-app")
-    compose_path = _materialize_net_inventory_compose(
-        app_spec=app_spec,
-        deployment_dir=deployment_dir,
-        app_port=0,
-        compose_project=compose_project,
-    )
+    compose_path = _materialize_net_inventory_compose(app_spec=app_spec, deployment_dir=deployment_dir, compose_project=compose_project)
     _append_job_log(logs, f"Wrote compose: {compose_path}")
+
     up_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "up", "-d"]
     code, stdout, stderr = _run(up_cmd, cwd=deployment_dir)
     _append_job_log(logs, f"Executed: {' '.join(up_cmd)}")
@@ -435,96 +382,172 @@ def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[di
     if code != 0:
         _run(["docker", "compose", "-p", compose_project, "-f", str(compose_path), "down", "--remove-orphans"], cwd=deployment_dir)
         raise RuntimeError(f"docker compose up failed: {stderr or stdout}")
+
     app_port = _resolve_published_port(f"{compose_project}-api", "8080/tcp")
-    app_container_name = f"{compose_project}-api"
-    app_url = f"http://localhost:{app_port}"
-    _append_job_log(logs, f"Local app URL: {app_url}")
-    _append_job_log(logs, f"Allocated ports: app={app_port}/tcp")
-    _append_job_log(logs, "Compose up succeeded; readiness checks deferred to smoke_test job")
-    deploy_output = {
+    app_output = {
         "app_slug": app_slug,
         "compose_project": compose_project,
         "deployment_dir": str(deployment_dir),
         "compose_path": str(compose_path),
-        "app_container_name": app_container_name,
-        "app_url": app_url,
+        "app_container_name": f"{compose_project}-api",
+        "app_url": f"http://localhost:{app_port}",
         "ports": {"app_tcp": app_port},
     }
+    _append_job_log(logs, f"Local app URL: {app_output['app_url']}")
+    _append_job_log(logs, "Queued sibling provisioning stage")
     follow_up = [
         {
-            "type": "smoke_test",
+            "type": "provision_sibling_xyn",
             "input_json": {
-                "deployment": deploy_output,
+                "deployment": app_output,
                 "app_spec": app_spec,
                 "source_job_id": str(job.id),
             },
         }
     ]
-    return deploy_output, follow_up
+    return app_output, follow_up
+
+
+def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    payload = job.input_json or {}
+    deployment = payload.get("deployment") if isinstance(payload.get("deployment"), dict) else {}
+    workspace = db.query(Workspace).filter(Workspace.id == job.workspace_id).first()
+    workspace_slug = str(getattr(workspace, "slug", "default") or "default")
+    sibling_name = _safe_slug(f"smoke-{deployment.get('app_slug') or 'app'}-{str(job.id)[:6]}", default="smoke-app")
+    ui_host = f"{sibling_name}.localhost"
+    api_host = f"api.{sibling_name}.localhost"
+    _append_job_log(logs, f"Provisioning sibling Xyn: name={sibling_name} ui_host={ui_host} api_host={api_host}")
+    try:
+        sibling = provision_local_instance(
+            ProvisionLocalRequest(
+                name=sibling_name,
+                force=True,
+                workspace_slug=workspace_slug,
+                ui_host=ui_host,
+                api_host=api_host,
+            )
+        )
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        raise RuntimeError(f"Sibling provisioning failed: {detail}") from exc
+
+    sibling_output = {
+        "deployment_id": sibling.get("deployment_id"),
+        "compose_project": sibling.get("compose_project"),
+        "ui_url": sibling.get("ui_url"),
+        "api_url": sibling.get("api_url"),
+    }
+    follow_up = [
+        {
+            "type": "smoke_test",
+            "input_json": {
+                "deployment": deployment,
+                "sibling": sibling_output,
+                "source_job_id": str(job.id),
+            },
+        }
+    ]
+    return sibling_output, follow_up
 
 
 def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     payload = job.input_json or {}
     deployment = payload.get("deployment") if isinstance(payload.get("deployment"), dict) else {}
-    app_url = str(deployment.get("app_url") or "").rstrip("/")
+    sibling = payload.get("sibling") if isinstance(payload.get("sibling"), dict) else {}
     app_container_name = str(deployment.get("app_container_name") or "").strip()
-    if not app_url:
-        raise RuntimeError("smoke_test missing deployment.app_url")
     if not app_container_name:
         raise RuntimeError("smoke_test missing deployment.app_container_name")
-    _append_job_log(logs, f"Smoke testing app URL: {app_url}")
-    _append_job_log(logs, f"Waiting for app health up to {APP_DEPLOY_HEALTH_TIMEOUT_SECONDS}s")
-    if not _wait_for_container_http_ok(app_container_name, "/health", timeout_seconds=APP_DEPLOY_HEALTH_TIMEOUT_SECONDS):
-        raise RuntimeError(f"App health endpoint failed to become ready in container {app_container_name}")
-    health_code, health_json, health_text = _container_http_json(app_container_name, "GET", "/health")
-    if health_code != 200:
-        raise RuntimeError(f"Health check failed ({health_code}): {health_text}")
-    routes_ok: dict[str, Any] = {}
-    list_code, list_json, list_text = _container_http_json(app_container_name, "GET", "/devices")
-    routes_ok["list_devices"] = {"code": list_code, "body": list_json or list_text}
-    if list_code != 200:
-        raise RuntimeError(f"GET /devices failed ({list_code}): {list_text}")
-    create_payload = {"name": "core-router-1", "ip": "10.10.0.1", "workspace_id": str(job.workspace_id)}
-    create_code, create_json, create_text = _container_http_json(app_container_name, "POST", "/devices", payload=create_payload)
-    routes_ok["create_device"] = {"code": create_code, "body": create_json or create_text}
-    if create_code not in {200, 201}:
-        raise RuntimeError(f"POST /devices failed ({create_code}): {create_text}")
-    _append_job_log(logs, "App API smoke checks passed (/health, GET /devices, POST /devices)")
+
+    _append_job_log(logs, f"Waiting for app health in container: {app_container_name}")
+    if not _wait_for_container_http_ok(app_container_name, "/health", port=8080, timeout_seconds=APP_DEPLOY_HEALTH_TIMEOUT_SECONDS):
+        raise RuntimeError(f"App health endpoint did not become ready in {app_container_name}")
 
     workspace = db.query(Workspace).filter(Workspace.id == job.workspace_id).first()
     workspace_slug = str(getattr(workspace, "slug", "default") or "default")
-    sibling_name = _safe_slug(f"smoke-{deployment.get('app_slug') or 'app'}-{str(job.id)[:6]}", default="smoke-app")
-    _append_job_log(logs, f"Provisioning sibling Xyn instance for smoke checks: {sibling_name}")
-    try:
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                provision_local_instance,
-                ProvisionLocalRequest(
-                    name=sibling_name,
-                    force=True,
-                    workspace_slug=workspace_slug,
-                ),
-            )
-            sibling = future.result(timeout=SMOKE_SIBLING_TIMEOUT_SECONDS)
-    except FutureTimeoutError as exc:
-        raise RuntimeError(
-            f"Sibling Xyn provisioning timed out after {SMOKE_SIBLING_TIMEOUT_SECONDS}s"
-        ) from exc
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
-        raise RuntimeError(f"Sibling Xyn provisioning failed: {detail}") from exc
-    _append_job_log(logs, f"Sibling Xyn URLs: ui={sibling.get('ui_url')} api={sibling.get('api_url')}")
-    return {
-        "app_health": {"code": health_code, "body": health_json or health_text},
-        "app_checks": routes_ok,
-        "sibling_xyn": {
-            "deployment_id": sibling.get("deployment_id"),
-            "compose_project": sibling.get("compose_project"),
-            "ui_url": sibling.get("ui_url"),
-            "api_url": sibling.get("api_url"),
+    health_code, health_body, health_text = _container_http_json(app_container_name, "GET", "/health", port=8080)
+    if health_code != 200:
+        raise RuntimeError(f"App health check failed ({health_code}): {health_text}")
+
+    list_code, list_body, list_text = _container_http_json(
+        app_container_name,
+        "GET",
+        f"/devices?workspace_id={job.workspace_id}",
+        port=8080,
+    )
+    if list_code != 200:
+        raise RuntimeError(f"GET /devices failed ({list_code}): {list_text}")
+    create_code, create_body, create_text = _container_http_json(
+        app_container_name,
+        "POST",
+        "/devices",
+        port=8080,
+        payload={
+            "workspace_id": str(job.workspace_id),
+            "name": "seeded-device-1",
+            "kind": "router",
+            "status": "online",
+            "location_id": None,
         },
-        "status": "passed",
-    }, []
+    )
+    if create_code not in {200, 201}:
+        raise RuntimeError(f"POST /devices failed ({create_code}): {create_text}")
+    report_code, report_body, report_text = _container_http_json(
+        app_container_name,
+        "GET",
+        f"/reports/devices-by-status?workspace_id={job.workspace_id}",
+        port=8080,
+    )
+    if report_code != 200:
+        raise RuntimeError(f"GET /reports/devices-by-status failed ({report_code}): {report_text}")
+
+    sibling_project = str(sibling.get("compose_project") or "").strip()
+    sibling_api_container = f"{sibling_project}-api" if sibling_project else ""
+    sibling_ui_container = f"{sibling_project}-ui" if sibling_project else ""
+    if not sibling_api_container or not _docker_container_running(sibling_api_container):
+        raise RuntimeError("Sibling API container is not running")
+    if not sibling_ui_container or not _docker_container_running(sibling_ui_container):
+        raise RuntimeError("Sibling UI container is not running")
+    sibling_health_code = 0
+    sibling_health_body: dict[str, Any] | str = {}
+    sibling_health_text = ""
+    for health_path in ("/health", "/api/v1/health", "/xyn/api/health", "/xyn/api/v1/health", "/", "/xyn/api/auth/mode", "/xyn/api/me"):
+        code, body, text = _container_http_json(sibling_api_container, "GET", health_path, port=8000)
+        if code in {200, 401}:
+            sibling_health_code = code
+            sibling_health_body = body or {"path": health_path}
+            sibling_health_text = text
+            break
+    if sibling_health_code != 200:
+        raise RuntimeError(f"Sibling API health check failed ({code}): {text}")
+    _append_job_log(logs, f"Sibling health OK: {sibling.get('api_url')}")
+
+    palette_result = execute_palette_prompt(
+        db,
+        prompt="show devices",
+        workspace_id=job.workspace_id,
+        workspace_slug=workspace_slug,
+    )
+    if palette_result.get("kind") != "table":
+        raise RuntimeError(f"Palette did not return table: {palette_result}")
+    if not isinstance(palette_result.get("rows"), list) or not palette_result.get("rows"):
+        raise RuntimeError("Palette show devices returned no rows")
+    _append_job_log(logs, f"Palette check returned {len(palette_result.get('rows') or [])} rows")
+
+    return (
+        {
+            "app_health": {"code": health_code, "body": health_body or health_text},
+            "app_checks": {
+                "list_devices": {"code": list_code, "body": list_body or list_text},
+                "create_device": {"code": create_code, "body": create_body or create_text},
+                "report_devices_by_status": {"code": report_code, "body": report_body or report_text},
+            },
+            "sibling_health": {"code": sibling_health_code, "body": sibling_health_body or sibling_health_text},
+            "sibling_xyn": sibling,
+            "palette": palette_result,
+            "status": "passed",
+        },
+        [],
+    )
 
 
 def _claim_next_job(db: Session) -> Optional[Job]:
@@ -571,9 +594,7 @@ def _recover_running_jobs(db: Session) -> None:
         payload["error"] = "Job interrupted by process restart before completion."
         row.output_json = payload
         prefix = row.logs_text.rstrip() + "\n" if row.logs_text else ""
-        row.logs_text = (
-            f"{prefix}[{_iso_now()}] Worker startup recovered stale RUNNING job as FAILED."
-        )
+        row.logs_text = f"{prefix}[{_iso_now()}] Worker startup recovered stale RUNNING job as FAILED."
         row.updated_at = _utc_now()
     db.commit()
 
@@ -593,6 +614,8 @@ def _execute_job(job_id: uuid.UUID) -> None:
                 output_json, follow_up_jobs = _handle_generate_app_spec(db, job, logs)
             elif job.type == "deploy_app_local":
                 output_json, follow_up_jobs = _handle_deploy_app_local(db, job, logs)
+            elif job.type == "provision_sibling_xyn":
+                output_json, follow_up_jobs = _handle_provision_sibling_xyn(db, job, logs)
             elif job.type == "smoke_test":
                 output_json, follow_up_jobs = _handle_smoke_test(db, job, logs)
             else:

@@ -24,5 +24,13 @@ Outcomes:
 - TR-369 / EMS domain modeling and schema pack integration.
 - EMS inventory synchronization and reconciliation jobs.
 - Rich draft validation and policy checks before submit.
-- Job workers for real execution (spec generation, deploy, smoke test).
 - Artifact binding from jobs to release/runtime specs and rollout workflows.
+
+## Phase 2 Hardening (Current)
+
+- Lightweight endpoint contracts for core API and net-inventory API.
+- Contract validator tooling (`scripts/validate_contracts.py`) and end-to-end harness (`scripts/run_e2e_validation.sh`).
+- Palette command registry (`palette_commands`) with workspace override + global fallback.
+- Workspace isolation tests for palette/device flows.
+- Persistence checks across net-inventory service and database restarts.
+- Artifact refresh smoke path validation.

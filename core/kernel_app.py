@@ -19,7 +19,11 @@ from core.artifact_registry import ensure_seed_default_registry
 from core.api.drafts import router as drafts_router
 from core.api.jobs import router as jobs_router
 from core.api.locations import router as locations_router
+from core.api.palette import router as palette_router
 from core.api.primitives import router as primitives_router
+from core.api.workspaces import router as workspaces_router
+from core.api.artifact_refresh import router as artifact_refresh_router
+from core.palette_commands import ensure_default_palette_commands
 from core.provisioning_local import router as provisioning_router
 from core.database import init_db
 from core.database import SessionLocal
@@ -74,6 +78,7 @@ async def _lifespan(app: FastAPI):
     try:
         ensure_default_workspace(db)
         ensure_seed_default_registry(db)
+        ensure_default_palette_commands(db)
     finally:
         db.close()
     ensure_default_agent_via_api()
@@ -145,7 +150,10 @@ def create_app() -> FastAPI:
     app.include_router(drafts_router, prefix="/api/v1", tags=["Drafts"])
     app.include_router(jobs_router, prefix="/api/v1", tags=["Jobs"])
     app.include_router(locations_router, prefix="/api/v1", tags=["Locations"])
+    app.include_router(workspaces_router, prefix="/api/v1", tags=["Workspaces"])
     app.include_router(primitives_router, prefix="/api/v1", tags=["Primitives"])
+    app.include_router(palette_router, prefix="/api/v1", tags=["Palette"])
+    app.include_router(artifact_refresh_router, prefix="/api/v1", tags=["Artifacts"])
 
     return app
 

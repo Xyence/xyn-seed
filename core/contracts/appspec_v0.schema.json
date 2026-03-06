@@ -50,7 +50,7 @@
               "required": ["container", "host", "protocol"],
               "properties": {
                 "container": {"type": "integer", "minimum": 1, "maximum": 65535},
-                "host": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "host": {"type": "integer", "minimum": 0, "maximum": 65535},
                 "protocol": {"type": "string", "enum": ["tcp", "udp"]}
               }
             }

@@ -1,0 +1,56 @@
+{
+  "name": "net-inventory-api",
+  "description": "Runtime contract checks for deployed net-inventory artifact API.",
+  "endpoints": [
+    {
+      "name": "health",
+      "method": "GET",
+      "path": "/health",
+      "success_status": [200],
+      "required_response_fields": ["status", "service"],
+      "workspace_scope": "none"
+    },
+    {
+      "name": "create-device",
+      "method": "POST",
+      "path": "/devices",
+      "success_status": [200, 201],
+      "request_json": {
+        "workspace_id": "$workspace_id",
+        "name": "contract-device-$rand",
+        "kind": "switch",
+        "status": "online"
+      },
+      "required_response_fields": ["id", "workspace_id", "name"],
+      "extract": {
+        "device_id": "id",
+        "device_name": "name"
+      },
+      "workspace_scope": "required query/body"
+    },
+    {
+      "name": "list-devices",
+      "method": "GET",
+      "path": "/devices?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["items"],
+      "workspace_scope": "required query/body"
+    },
+    {
+      "name": "get-device",
+      "method": "GET",
+      "path": "/devices/$device_id",
+      "success_status": [200],
+      "required_response_fields": ["id", "workspace_id", "name"],
+      "workspace_scope": "resource must belong to workspace"
+    },
+    {
+      "name": "report-devices-by-status",
+      "method": "GET",
+      "path": "/reports/devices-by-status?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["labels", "values"],
+      "workspace_scope": "required query/body"
+    }
+  ]
+}

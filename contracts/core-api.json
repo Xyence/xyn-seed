@@ -1,0 +1,148 @@
+{
+  "name": "xyn-core-api",
+  "description": "Pragmatic runtime contract checks for core control-plane endpoints.",
+  "default_headers": {
+    "X-Workspace-Slug": "$workspace_slug"
+  },
+  "endpoints": [
+    {
+      "name": "health",
+      "method": "GET",
+      "path": "/health",
+      "success_status": [200],
+      "required_response_fields": ["status", "version"],
+      "workspace_scope": "none"
+    },
+    {
+      "name": "list-primitives",
+      "method": "GET",
+      "path": "/api/v1/primitives",
+      "success_status": [200],
+      "required_response_fields": ["0.slug", "0.api_base"],
+      "workspace_scope": "workspace optional; validated via header context"
+    },
+    {
+      "name": "create-draft",
+      "method": "POST",
+      "path": "/api/v1/drafts",
+      "success_status": [201],
+      "request_json": {
+        "type": "app_intent",
+        "title": "Contract Draft",
+        "content_json": {
+          "raw_prompt": "Build a network inventory app with devices by workspace"
+        }
+      },
+      "required_response_fields": ["id", "workspace_id", "status", "content_json.raw_prompt"],
+      "extract": {
+        "draft_id": "id"
+      },
+      "workspace_scope": "required"
+    },
+    {
+      "name": "list-drafts",
+      "method": "GET",
+      "path": "/api/v1/drafts?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["0.id", "0.workspace_id"],
+      "workspace_scope": "required"
+    },
+    {
+      "name": "get-draft",
+      "method": "GET",
+      "path": "/api/v1/drafts/$draft_id?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["id", "workspace_id", "status"],
+      "workspace_scope": "required"
+    },
+    {
+      "name": "patch-draft",
+      "method": "PATCH",
+      "path": "/api/v1/drafts/$draft_id?workspace_id=$workspace_id",
+      "success_status": [200],
+      "request_json": {
+        "title": "Contract Draft Updated"
+      },
+      "required_response_fields": ["id", "title", "updated_at"],
+      "workspace_scope": "required"
+    },
+    {
+      "name": "submit-draft",
+      "method": "POST",
+      "path": "/api/v1/drafts/$draft_id/submit?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["draft.id", "job_id", "job_status"],
+      "extract": {
+        "submitted_job_id": "job_id"
+      },
+      "workspace_scope": "required"
+    },
+    {
+      "name": "list-jobs",
+      "method": "GET",
+      "path": "/api/v1/jobs?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["0.id", "0.type", "0.status"],
+      "extract": {
+        "job_id": "0.id"
+      },
+      "workspace_scope": "required"
+    },
+    {
+      "name": "get-job",
+      "method": "GET",
+      "path": "/api/v1/jobs/$job_id?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": ["id", "status", "type"],
+      "workspace_scope": "required"
+    },
+    {
+      "name": "execute-palette",
+      "method": "POST",
+      "path": "/api/v1/palette/execute",
+      "success_status": [200],
+      "request_json": {
+        "workspace_id": "$workspace_id",
+        "prompt": "show devices"
+      },
+      "required_response_fields": ["kind", "columns", "rows", "text"],
+      "workspace_scope": "required"
+    },
+    {
+      "name": "list-locations",
+      "method": "GET",
+      "path": "/api/v1/locations?workspace_id=$workspace_id",
+      "success_status": [200],
+      "required_response_fields": [],
+      "workspace_scope": "required"
+    },
+    {
+      "name": "create-location",
+      "method": "POST",
+      "path": "/api/v1/locations?workspace_id=$workspace_id",
+      "success_status": [201],
+      "request_json": {
+        "workspace_id": "$workspace_id",
+        "name": "Contract Site",
+        "kind": "site",
+        "city": "Austin"
+      },
+      "required_response_fields": ["id", "workspace_id", "name", "kind"],
+      "extract": {
+        "location_id": "id"
+      },
+      "workspace_scope": "required"
+    },
+    {
+      "name": "patch-location",
+      "method": "PATCH",
+      "path": "/api/v1/locations/$location_id?workspace_id=$workspace_id",
+      "success_status": [200],
+      "request_json": {
+        "notes": "updated by contract validation"
+      },
+      "required_response_fields": ["id", "notes", "updated_at"],
+      "workspace_scope": "required"
+    }
+  ]
+}

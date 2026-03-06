@@ -60,7 +60,9 @@ def _tls_enabled() -> bool:
     return bool(str(os.getenv("XYN_TRAEFIK_ACME_EMAIL", "")).strip())
 
 
-def _resolved_hosts(project: str) -> tuple[str, str]:
+def _resolved_hosts(project: str, *, ui_host_override: Optional[str] = None, api_host_override: Optional[str] = None) -> tuple[str, str]:
+    if ui_host_override and api_host_override:
+        return ui_host_override.strip(), api_host_override.strip()
     ui_override = str(os.getenv("XYN_LOCAL_UI_HOST", "")).strip()
     api_override = str(os.getenv("XYN_LOCAL_API_HOST", "")).strip()
     if ui_override and api_override:
@@ -435,6 +437,8 @@ class ProvisionLocalRequest(BaseModel):
     registry_slug: Optional[str] = None
     channel: Optional[str] = None
     workspace_slug: Optional[str] = None
+    ui_host: Optional[str] = None
+    api_host: Optional[str] = None
 
 
 def _load_state(deploy_dir: Path) -> Optional[Dict[str, Any]]:
@@ -596,7 +600,11 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
 
     up_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "up", "-d"]
     down_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "down", "--remove-orphans", "--volumes"]
-    ui_host, api_host = _resolved_hosts(project)
+    ui_host, api_host = _resolved_hosts(
+        project,
+        ui_host_override=request.ui_host,
+        api_host_override=request.api_host,
+    )
     tls = _tls_enabled()
     scheme = "https" if tls else "http"
     compose_yaml = _compose_yaml(

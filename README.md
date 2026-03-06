@@ -244,6 +244,38 @@ XYN_KERNEL_MANIFEST_ROOTS=/home/ubuntu/src
 - `PATCH /api/v1/jobs/{id}` - Update job status/output/logs
 - `GET /api/v1/jobs/{id}/logs` - Fetch job logs text
 
+Draft submit now runs chained jobs for app-intent drafts:
+- `generate_app_spec`
+- `deploy_app_local`
+- `provision_sibling_xyn`
+- `smoke_test`
+
+### Palette
+
+- `GET /api/v1/palette/commands` - List workspace + global palette command bindings
+- `POST /api/v1/palette/commands` - Register workspace palette command
+- `PATCH /api/v1/palette/commands/{id}` - Update workspace palette command
+- `DELETE /api/v1/palette/commands/{id}` - Remove workspace palette command
+- `POST /api/v1/palette/execute` - Execute palette prompt via registered command handlers
+
+### Artifact refresh (local)
+
+- `POST /api/v1/artifacts/refresh` - Pull latest artifact images and return pull logs
+  - body example: `{"artifacts":["xyn-ui","xyn-api","net-inventory-api"],"channel":"dev"}`
+
+### Workspace APIs (Phase 2 validation)
+
+- `GET /api/v1/workspaces`
+- `POST /api/v1/workspaces`
+
+## Validation Harness
+
+```bash
+scripts/run_e2e_validation.sh
+```
+
+This runs contract checks (`contracts/*.json`), workspace isolation validation, persistence restart checks, palette execution checks, and artifact refresh smoke tests.
+
 Workspace context is required for draft/job endpoints. Provide one of:
 - Query param: `workspace_id=<uuid>` or `workspace_slug=default`
 - Header: `X-Workspace-Id: <uuid>` or `X-Workspace-Slug: default`
