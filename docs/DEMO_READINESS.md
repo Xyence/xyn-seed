@@ -94,7 +94,7 @@ Task Name: Stabilize prompt-driven build tracking UX
 Why It Matters for Demo: The operator must be able to understand whether the build succeeded and where to go next.  
 Owner: Codex  
 Status: in-progress  
-Notes: Track build should surface status, deployment target, sibling target, and failures clearly.
+Notes: Track build should surface status, deployment target, sibling target, and failures clearly. The current Draft Detail view now exposes explicit `Open deployed app` and `Open sibling Xyn` CTAs plus an execution trace card, but the deployed app still opens to the current FastAPI docs route rather than a true installed-app landing page.
 
 TASK-05  
 Task Name: Validate context-pack authority bridge live  
@@ -115,7 +115,7 @@ Task Name: Prepare repeatable golden-path validation script/checklist
 Why It Matters for Demo: Fast regression detection is required during the demo-prep window.  
 Owner: Codex  
 Status: complete  
-Notes: Added a browser-driven Playwright smoke test in `xyn-platform/apps/xyn-ui/e2e/demo-golden-path.spec.ts` and validated it locally on 2026-03-07 against the visible UI path. The smoke covers login, build prompt submission, draft creation, build tracking, execution trace visibility, deployed app open action, palette command submission, and artifact visibility for generated `app_spec` artifacts.
+Notes: Added a browser-driven Playwright smoke test in `xyn-platform/apps/xyn-ui/e2e/demo-golden-path.spec.ts` and a one-command runner in `scripts/run_demo_rehearsal.sh`. The rehearsal captures step-labeled screenshots, browser logs, and Playwright report output under `.xyn/demo-rehearsal/<timestamp>/`. Validated locally on 2026-03-07 against the visible UI path with `./scripts/run_demo_rehearsal.sh`; latest confirmed evidence bundle: `.xyn/demo-rehearsal/20260307-115802/`. The smoke covers login, build prompt submission, draft creation, build tracking, execution trace visibility, deployed app open action, palette command submission, and artifact visibility for generated `app_spec` artifacts.
 
 TASK-08  
 Task Name: Expose execution-trace proof point on build tracking surface  
