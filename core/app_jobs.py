@@ -409,11 +409,18 @@ def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[di
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     deployment_dir = _deployments_root() / app_slug / stamp
     deployment_dir.mkdir(parents=True, exist_ok=True)
-    compose_project = _safe_slug(f"xyn-app-{app_slug}-{str(job.id)[:8]}", default="xyn-app")
+    compose_project = _safe_slug(f"xyn-app-{app_slug}", default="xyn-app")
     compose_path = _materialize_net_inventory_compose(app_spec=app_spec, deployment_dir=deployment_dir, compose_project=compose_project)
     _append_job_log(logs, f"Wrote compose: {compose_path}")
 
+    down_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "down", "--remove-orphans", "--volumes"]
     up_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "up", "-d"]
+    down_code, down_stdout, down_stderr = _run(down_cmd, cwd=deployment_dir)
+    _append_job_log(logs, f"Executed: {' '.join(down_cmd)}")
+    if down_stdout:
+        _append_job_log(logs, f"compose down stdout: {down_stdout[-600:]}")
+    if down_stderr:
+        _append_job_log(logs, f"compose down stderr: {down_stderr[-600:]}")
     code, stdout, stderr = _run(up_cmd, cwd=deployment_dir)
     _append_job_log(logs, f"Executed: {' '.join(up_cmd)}")
     if stdout:

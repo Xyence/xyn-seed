@@ -1,6 +1,6 @@
 # Demo Objective
 
-The demo must reliably show Xyn bootstrapping a fresh instance, landing in a usable workspace, creating a simple network inventory application through the prompt-driven app builder, deploying it, opening it, and exercising palette-driven interaction such as `show devices`, while visibly using governed artifacts and context packs without critical legacy UI leaks or bootstrap failures.
+The demo must reliably show Xyn bootstrapping a fresh instance, landing in a usable workspace, creating a simple network inventory capability through the prompt-driven app builder, deploying it into the Xyn runtime shell, and operating it through the palette and artifact/report surfaces, while visibly using governed artifacts and context packs without critical legacy UI leaks or bootstrap failures.
 
 # Golden Path
 
@@ -12,10 +12,10 @@ The demo must reliably show Xyn bootstrapping a fresh instance, landing in a usa
 6. Draft is created and submitted
 7. AppSpec is generated
 8. Local deployment succeeds
-9. Build tracking surface shows deployment status and resulting URLs
-10. Open the deployed app successfully
+9. Build tracking surface shows deployment status and the installed capability inside Xyn
+10. Installed capability is visible and usable from within Xyn
 11. Open the sibling Xyn instance successfully
-12. Palette command `show devices` succeeds and returns structured data
+12. Palette commands such as `show devices` and `show devices by status` operate the installed capability and return visible results
 13. Context packs and artifacts are visible through runtime APIs
 14. No critical legacy UI leaks appear on the demo path
 
@@ -39,11 +39,11 @@ Current Status: partially addressed
 Next Action: run repeated clean-start validation and verify Development/default workspace behavior remains deterministic.
 
 DEMO-02  
-Title: App open path is not yet a true login/application entrypoint  
-Description: The current deployed app link still reflects runtime service exposure rather than a fully artifact-installed application experience with an expected login/landing flow.  
-Impact on Demo: Weakens the core story that Xyn builds and opens a usable application artifact.  
+Title: Installed-capability semantics need to stay consistent  
+Description: The demo must keep Xyn as the primary runtime shell and demonstrate that deployment installs a new capability into Xyn, rather than implying a separate arbitrary frontend is the main user surface.  
+Impact on Demo: Weakens the platform story if the demo appears to leave Xyn to use the generated capability.  
 Current Status: partially addressed  
-Next Action: replace runtime-service link behavior with the correct application entry route for the demo app.
+Next Action: keep the Draft Detail surface and browser rehearsal centered on installed capability visibility, palette operation, and artifacts/reports inside Xyn.
 
 DEMO-03  
 Title: Sibling Xyn does not yet install the generated app as an artifact  
@@ -64,7 +64,7 @@ Title: Demo-path status visibility is still thin
 Description: Draft, build, deployment, and sibling progress are visible, but success/failure signaling is not yet unified enough across activity, notifications, and build tracking.  
 Impact on Demo: Makes it harder to explain what the system is doing during the live flow.  
 Current Status: partially addressed  
-Next Action: tighten the build-status presentation on the draft tracking surface and ensure clear success/failure signals.
+Next Action: tighten the build-status presentation on the draft tracking surface and ensure clear success/failure signals. Notifications already expose app-build completion/failure, and Draft Detail now exposes in-shell capability and generated-artifact paths, but the overall story still depends on several separate surfaces.
 
 # Active Tasks
 
@@ -76,11 +76,11 @@ Status: in-progress
 Notes: Must include clean-start validation after teardown.
 
 TASK-02  
-Task Name: Finish app open flow for generated network inventory app  
-Why It Matters for Demo: The built app must open as an application, not just expose a raw service endpoint.  
+Task Name: Keep deployment semantics honest inside Xyn shell  
+Why It Matters for Demo: The demo should show that deployment installs new capability into Xyn rather than sending the user to a disconnected frontend.  
 Owner: Codex  
-Status: pending  
-Notes: Demo should reach a recognizable app landing/login experience.
+Status: in-progress  
+Notes: Build tracking should show the installed capability, available palette actions, and visible report/query outcomes inside Xyn.
 
 TASK-03  
 Task Name: Bridge generated app into sibling Xyn install story  
@@ -94,7 +94,7 @@ Task Name: Stabilize prompt-driven build tracking UX
 Why It Matters for Demo: The operator must be able to understand whether the build succeeded and where to go next.  
 Owner: Codex  
 Status: in-progress  
-Notes: Track build should surface status, deployment target, sibling target, and failures clearly. The current Draft Detail view now exposes explicit `Open deployed app` and `Open sibling Xyn` CTAs plus an execution trace card, but the deployed app still opens to the current FastAPI docs route rather than a true installed-app landing page.
+Notes: Track build should surface status, installed capability visibility inside Xyn, sibling target, and failures clearly. The current Draft Detail view now exposes an installed-capability card, execution trace, sibling CTA, palette-oriented usage guidance for the generated network inventory capability, and a direct in-shell "View generated artifacts" path for demo step 8. Local reprovisioning now explicitly pulls and recreates remote `:dev` images so browser-facing UI changes are not silently masked by stale containers, and repeated demo builds now reuse a stable `xyn-app-net-inventory` compose project to avoid Docker network exhaustion during rehearsals.
 
 TASK-05  
 Task Name: Validate context-pack authority bridge live  

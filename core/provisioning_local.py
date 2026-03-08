@@ -55,6 +55,26 @@ def _as_bool(value: str) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _is_remote_image_ref(value: str) -> bool:
+    ref = str(value or "").strip()
+    return "/" in ref
+
+
+def _image_tag(value: str) -> str:
+    ref = str(value or "").strip()
+    if "@" in ref:
+        return ""
+    _, _, tag = ref.rpartition(":")
+    return tag if tag and "/" not in tag else ""
+
+
+def _should_refresh_remote_image(value: str, *, force: bool) -> bool:
+    ref = str(value or "").strip()
+    if not ref or not _is_remote_image_ref(ref):
+        return False
+    return force or _image_tag(ref) == DEFAULT_IMAGE_TAG
+
+
 def _tls_enabled() -> bool:
     if _as_bool(os.getenv("XYN_TRAEFIK_ENABLE_TLS", "false")):
         return True
@@ -603,8 +623,14 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail={"message": str(exc)}) from exc
 
+    remote_refresh_services: list[str] = []
+    if _should_refresh_remote_image(artifact_resolution["api_image"], force=request.force):
+        remote_refresh_services.extend(["backend", "migrate"])
+    if _should_refresh_remote_image(artifact_resolution["ui_image"], force=request.force):
+        remote_refresh_services.append("ui")
     up_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "up", "-d"]
     down_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "down", "--remove-orphans", "--volumes"]
+    pull_cmd = [*_compose_cmd(), "-p", project, "-f", str(compose_path), "pull", *remote_refresh_services] if remote_refresh_services else []
     ui_host, api_host = _resolved_hosts(
         project,
         ui_host_override=request.ui_host,
@@ -622,6 +648,21 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
     compose_path.write_text(compose_yaml, encoding="utf-8")
     if request.force:
         _run(down_cmd, cwd=deploy_dir)
+    pull_stdout = ""
+    pull_stderr = ""
+    if pull_cmd:
+        pull_code, pull_stdout, pull_stderr = _run(pull_cmd, cwd=deploy_dir)
+        if pull_code != 0:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "Failed to pull latest artifact images for local instance",
+                    "deployment_id": deployment_id,
+                    "compose_project": project,
+                    "stderr": pull_stderr or pull_stdout,
+                },
+            )
+        up_cmd.append("--force-recreate")
     code, stdout, stderr = _run(up_cmd, cwd=deploy_dir)
     status = "succeeded" if code == 0 else "failed"
 
@@ -639,6 +680,9 @@ def provision_local_instance(request: ProvisionLocalRequest) -> Dict[str, Any]:
         "artifact_resolution": artifact_resolution,
         "created_at": _utc_now().isoformat(),
     }
+    if pull_cmd:
+        deployment_payload["pull_stdout"] = pull_stdout
+        deployment_payload["pull_stderr"] = pull_stderr
     deployment_metadata = {
         "surface": {
             "label": "Deployment",

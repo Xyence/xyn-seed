@@ -13,6 +13,28 @@ from core.palette_commands import build_palette_result_from_items, resolve_palet
 from core.workspaces import resolve_workspace_by_context
 
 
+def build_palette_chart_result(
+    *,
+    labels: list[str],
+    values: list[int | float],
+    title: str,
+    text_template: str,
+    label_field: str,
+    value_field: str,
+) -> dict[str, Any]:
+    rows = [{label_field: str(label), value_field: value} for label, value in zip(labels, values)]
+    text = str(text_template or "{{count}} buckets").replace("{{count}}", str(len(rows)))
+    return {
+        "kind": "bar_chart",
+        "columns": [label_field, value_field],
+        "rows": rows,
+        "labels": labels,
+        "values": values,
+        "title": title,
+        "text": text,
+    }
+
+
 def _resolve_value(
     value: Any,
     *,
@@ -127,15 +149,37 @@ def execute_palette_prompt(
             },
         }
 
-    items = body.get("items") if isinstance(body.get("items"), list) else []
-    columns = adapter.get("columns") if isinstance(adapter.get("columns"), list) else ["id", "name"]
+    kind = str(adapter.get("kind") or "table")
     text_template = str(adapter.get("text_template") or "{{count}} rows")
-    result = build_palette_result_from_items(
-        items=[row for row in items if isinstance(row, dict)],
-        columns=[str(col) for col in columns],
-        text_template=text_template,
-    )
-    result["kind"] = str(adapter.get("kind") or result.get("kind") or "table")
+    if kind == "bar_chart":
+        labels = [str(row) for row in (body.get("labels") if isinstance(body.get("labels"), list) else [])]
+        raw_values = body.get("values") if isinstance(body.get("values"), list) else []
+        values: list[int | float] = []
+        for value in raw_values:
+            if isinstance(value, (int, float)):
+                values.append(value)
+            else:
+                try:
+                    values.append(float(value))
+                except Exception:
+                    values.append(0)
+        result = build_palette_chart_result(
+            labels=labels,
+            values=values,
+            title=str(adapter.get("title") or "Report"),
+            text_template=text_template,
+            label_field=str(adapter.get("label_field") or "label"),
+            value_field=str(adapter.get("value_field") or "value"),
+        )
+    else:
+        items = body.get("items") if isinstance(body.get("items"), list) else []
+        columns = adapter.get("columns") if isinstance(adapter.get("columns"), list) else ["id", "name"]
+        result = build_palette_result_from_items(
+            items=[row for row in items if isinstance(row, dict)],
+            columns=[str(col) for col in columns],
+            text_template=text_template,
+        )
+        result["kind"] = kind or result.get("kind") or "table"
     result["meta"] = {
         "workspace_id": str(workspace.id),
         "workspace_slug": workspace.slug,

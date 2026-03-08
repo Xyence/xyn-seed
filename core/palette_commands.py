@@ -23,34 +23,59 @@ def normalize_command_key(value: str) -> str:
 
 def ensure_default_palette_commands(db: Session) -> None:
     """Seed global default commands used by Phase 2 validation."""
-    key = "show devices"
-    existing = (
-        db.query(PaletteCommand)
-        .filter(PaletteCommand.workspace_id.is_(None), func.lower(PaletteCommand.command_key) == key)
-        .first()
-    )
-    if existing:
-        return
-    row = PaletteCommand(
-        workspace_id=None,
-        command_key=key,
-        handler_type="http_json",
-        handler_config_json={
-            "base_url": "$deployment.app_url",
-            "method": "GET",
-            "path": "/devices",
-            "query_map": {"workspace_id": "$workspace_id"},
-            "response_adapter": {
-                "kind": "table",
-                "columns": ["id", "name", "kind", "status", "workspace_id", "location_id"],
-                "text_template": "{{count}} devices found",
+    defaults = [
+        (
+            "show devices",
+            {
+                "base_url": "$deployment.app_url",
+                "method": "GET",
+                "path": "/devices",
+                "query_map": {"workspace_id": "$workspace_id"},
+                "response_adapter": {
+                    "kind": "table",
+                    "columns": ["id", "name", "kind", "status", "workspace_id", "location_id"],
+                    "text_template": "{{count}} devices found",
+                },
             },
-        },
-        created_at=utc_now(),
-        updated_at=utc_now(),
-    )
-    db.add(row)
-    db.commit()
+        ),
+        (
+            "show devices by status",
+            {
+                "base_url": "$deployment.app_url",
+                "method": "GET",
+                "path": "/reports/devices-by-status",
+                "query_map": {"workspace_id": "$workspace_id"},
+                "response_adapter": {
+                    "kind": "bar_chart",
+                    "label_field": "status",
+                    "value_field": "count",
+                    "title": "Devices by status",
+                    "text_template": "{{count}} status buckets found",
+                },
+            },
+        ),
+    ]
+    changed = False
+    for key, config in defaults:
+        existing = (
+            db.query(PaletteCommand)
+            .filter(PaletteCommand.workspace_id.is_(None), func.lower(PaletteCommand.command_key) == key)
+            .first()
+        )
+        if existing:
+            continue
+        row = PaletteCommand(
+            workspace_id=None,
+            command_key=key,
+            handler_type="http_json",
+            handler_config_json=config,
+            created_at=utc_now(),
+            updated_at=utc_now(),
+        )
+        db.add(row)
+        changed = True
+    if changed:
+        db.commit()
 
 
 def resolve_palette_command(
