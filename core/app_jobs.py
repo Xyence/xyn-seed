@@ -14,6 +14,10 @@ import subprocess
 import threading
 import time
 import uuid
+import base64
+import hashlib
+import io
+import zipfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +43,8 @@ APPSPEC_SCHEMA_PATH = Path(__file__).resolve().parent / "contracts" / "appspec_v
 NET_INVENTORY_IMAGE = str(
     os.getenv("XYN_NET_INVENTORY_IMAGE", "public.ecr.aws/i0h0h0n4/xyn/artifacts/net-inventory-api:dev")
 ).strip()
+GENERATED_ARTIFACT_VERSION = "0.0.1-dev"
+ROOT_PLATFORM_API_CONTAINER = str(os.getenv("XYN_PLATFORM_API_CONTAINER", "xyn-local-api")).strip() or "xyn-local-api"
 
 
 def _utc_now() -> datetime:
@@ -65,6 +71,16 @@ def _deployments_root() -> Path:
     root = _workspace_root() / "app_deployments"
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def _generated_artifacts_root() -> Path:
+    root = _workspace_root() / "artifacts" / "generated"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _generated_artifact_slug(app_slug: str) -> str:
+    return f"app.{_safe_slug(app_slug, default='generated-app')}"
 
 
 def _run(cmd: list[str], *, cwd: Optional[Path] = None) -> tuple[int, str, str]:
@@ -141,6 +157,481 @@ except Exception as exc:
     except json.JSONDecodeError:
         body_json = {}
     return code, body_json, raw_body
+
+
+def _container_http_session_json(
+    container_name: str,
+    *,
+    steps: list[dict[str, Any]],
+    port: int,
+) -> tuple[int, dict[str, Any], str]:
+    script = f"""
+import http.cookiejar
+import json
+import urllib.error
+import urllib.parse
+import urllib.request
+
+steps = {steps!r}
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+opener = urllib.request.build_opener(
+    urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()),
+    NoRedirect(),
+)
+last = {{"code": 0, "body": "", "json": {{}}}}
+
+for step in steps:
+    method = str(step.get("method") or "GET").upper()
+    path = str(step.get("path") or "/")
+    body = step.get("body")
+    form = step.get("form")
+    headers = dict(step.get("headers") or {{}})
+    data = None
+    if form is not None:
+        headers.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        data = urllib.parse.urlencode(form).encode("utf-8")
+    elif body is not None:
+        headers.setdefault("Content-Type", "application/json")
+        data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(f"http://localhost:{port}" + path, method=method, headers=headers, data=data)
+    try:
+        with opener.open(req, timeout={HTTP_TIMEOUT_SECONDS}) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            try:
+                payload = json.loads(raw) if raw else {{}}
+            except json.JSONDecodeError:
+                payload = {{}}
+            last = {{"code": int(resp.status), "body": raw, "json": payload}}
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="ignore")
+        try:
+            payload = json.loads(raw) if raw else {{}}
+        except json.JSONDecodeError:
+                payload = {{}}
+        last = {{"code": int(exc.code), "body": raw, "json": payload}}
+        if int(exc.code) not in {{301, 302, 303, 307, 308}}:
+            break
+    except Exception as exc:
+        last = {{"code": 0, "body": str(exc), "json": {{}}}}
+        break
+
+print(json.dumps(last))
+"""
+    proc = subprocess.run(
+        ["docker", "exec", "-i", container_name, "python", "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=HTTP_TIMEOUT_SECONDS + 10,
+    )
+    if proc.returncode != 0:
+        return 0, {}, proc.stderr.strip() or proc.stdout.strip()
+    out = (proc.stdout or "").strip().splitlines()
+    if not out:
+        return 0, {}, "empty container response"
+    line = out[-1].strip()
+    try:
+        payload_json = json.loads(line)
+    except json.JSONDecodeError:
+        return 0, {}, line
+    code = int(payload_json.get("code") or 0)
+    raw_body = str(payload_json.get("body") or "")
+    body_json = payload_json.get("json") if isinstance(payload_json.get("json"), dict) else {}
+    return code, body_json, raw_body
+
+
+def _container_http_session_upload_json(
+    container_name: str,
+    *,
+    port: int,
+    upload_path: str,
+    file_field: str,
+    filename: str,
+    file_bytes: bytes,
+    extra_form: Optional[dict[str, Any]] = None,
+) -> tuple[int, dict[str, Any], str]:
+    blob_b64 = base64.b64encode(file_bytes).decode("ascii")
+    script = f"""
+import base64
+import json
+import requests
+
+session = requests.Session()
+login = session.post(
+    "http://localhost:{port}/auth/dev-login",
+    data={{"appId": "xyn-ui", "returnTo": "/app"}},
+    allow_redirects=False,
+    timeout={HTTP_TIMEOUT_SECONDS},
+)
+if login.status_code not in (200, 302, 303):
+    print(json.dumps({{"code": int(login.status_code), "body": login.text}}))
+    raise SystemExit(0)
+session.get("http://localhost:{port}/xyn/api/me", timeout={HTTP_TIMEOUT_SECONDS})
+blob = base64.b64decode({blob_b64!r})
+resp = session.post(
+    "http://localhost:{port}" + {upload_path!r},
+    data={extra_form or {}!r},
+    files={{{file_field!r}: ({filename!r}, blob, "application/zip")}},
+    timeout={HTTP_TIMEOUT_SECONDS},
+)
+print(json.dumps({{"code": int(resp.status_code), "body": resp.text}}))
+"""
+    proc = subprocess.run(
+        ["docker", "exec", "-i", container_name, "python", "-"],
+        input=script,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=HTTP_TIMEOUT_SECONDS + 15,
+    )
+    if proc.returncode != 0:
+        return 0, {}, proc.stderr.strip() or proc.stdout.strip()
+    out = (proc.stdout or "").strip().splitlines()
+    if not out:
+        return 0, {}, "empty container response"
+    line = out[-1].strip()
+    try:
+        payload_json = json.loads(line)
+    except json.JSONDecodeError:
+        return 0, {}, line
+    code = int(payload_json.get("code") or 0)
+    raw_body = str(payload_json.get("body") or "")
+    try:
+        body_json = json.loads(raw_body) if raw_body else {}
+    except json.JSONDecodeError:
+        body_json = {}
+    return code, body_json, raw_body
+
+
+def _build_generated_artifact_manifest(*, app_spec: dict[str, Any], runtime_config: dict[str, Any]) -> dict[str, Any]:
+    app_slug = _safe_slug(str(app_spec.get("app_slug") or "generated-app"), default="generated-app")
+    artifact_slug = _generated_artifact_slug(app_slug)
+    title = str(app_spec.get("title") or app_slug).strip() or app_slug
+    return {
+        "artifact": {
+            "id": artifact_slug,
+            "type": "application",
+            "slug": artifact_slug,
+            "version": GENERATED_ARTIFACT_VERSION,
+            "name": title,
+            "generated": True,
+        },
+        "capability": {
+            "visibility": "capabilities",
+            "category": "application",
+            "label": title,
+            "description": "Generated application capability installed through the artifact registry.",
+            "tags": ["generated", "application", app_slug],
+            "order": 120,
+        },
+        "suggestions": [
+            {
+                "id": f"{artifact_slug}-show-devices",
+                "name": "Show Devices",
+                "prompt": "Show devices",
+                "description": "List devices in the current workspace.",
+                "visibility": ["capability", "landing", "palette"],
+                "group": "Devices",
+                "order": 100,
+            },
+            {
+                "id": f"{artifact_slug}-show-locations",
+                "name": "Show Locations",
+                "prompt": "Show locations",
+                "description": "List locations in the current workspace.",
+                "visibility": ["capability", "palette"],
+                "group": "Locations",
+                "order": 110,
+            },
+            {
+                "id": f"{artifact_slug}-create-device",
+                "name": "Create Device",
+                "prompt": "Create device",
+                "description": "Create a new device in the current workspace.",
+                "visibility": ["capability", "palette"],
+                "group": "Devices",
+                "order": 120,
+            },
+            {
+                "id": f"{artifact_slug}-devices-by-status",
+                "name": "Devices by Status",
+                "prompt": "Show devices by status",
+                "description": "Display a status rollup chart for devices in the current workspace.",
+                "visibility": ["capability", "landing", "palette"],
+                "group": "Reports",
+                "order": 130,
+            },
+        ],
+        "surfaces": {
+            "manage": [{"label": "Workbench", "path": "/app/workbench", "order": 100}],
+            "docs": [{"label": "Workbench", "path": "/app/workbench", "order": 1000}],
+        },
+        "content": {
+            "app_spec": app_spec,
+            "runtime_config": runtime_config,
+        },
+    }
+
+
+def _package_generated_app(
+    *,
+    workspace_id: uuid.UUID,
+    source_job_id: str,
+    app_spec: dict[str, Any],
+    runtime_config: dict[str, Any],
+) -> dict[str, Any]:
+    app_slug = _safe_slug(str(app_spec.get("app_slug") or "generated-app"), default="generated-app")
+    artifact_slug = _generated_artifact_slug(app_slug)
+    package_root = _generated_artifacts_root() / app_slug
+    payload_root = package_root / "payload"
+    payload_root.mkdir(parents=True, exist_ok=True)
+
+    artifact_manifest = _build_generated_artifact_manifest(app_spec=app_spec, runtime_config=runtime_config)
+    artifact_manifest_path = package_root / "artifact.json"
+    app_spec_path = payload_root / "app_spec.json"
+    runtime_config_path = payload_root / "runtime_config.json"
+    artifact_manifest_path.write_text(json.dumps(artifact_manifest, indent=2, sort_keys=True), encoding="utf-8")
+    app_spec_path.write_text(json.dumps(app_spec, indent=2, sort_keys=True), encoding="utf-8")
+    runtime_config_path.write_text(json.dumps(runtime_config, indent=2, sort_keys=True), encoding="utf-8")
+
+    artifact_entry = {
+        "type": "application",
+        "slug": artifact_slug,
+        "version": GENERATED_ARTIFACT_VERSION,
+        "artifact_id": artifact_slug,
+        "title": str(app_spec.get("title") or app_slug),
+        "description": "Generated application artifact package",
+        "dependencies": [],
+        "bindings": [],
+    }
+    files: dict[str, bytes] = {}
+    base = f"artifacts/application/{artifact_slug}/{GENERATED_ARTIFACT_VERSION}"
+    artifact_zip_path = f"{base}/artifact.json"
+    payload_zip_path = f"{base}/payload/payload.json"
+    surfaces_zip_path = f"{base}/surfaces.json"
+    runtime_roles_zip_path = f"{base}/runtime_roles.json"
+    combined_payload = {
+        "app_spec": app_spec,
+        "runtime_config": runtime_config,
+        "generated": True,
+        "source_job_id": source_job_id,
+        "source_workspace_id": str(workspace_id),
+    }
+    files[artifact_zip_path] = json.dumps(artifact_manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    files[payload_zip_path] = json.dumps(combined_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    files[surfaces_zip_path] = b"[]"
+    files[runtime_roles_zip_path] = b"[]"
+    manifest = {
+        "format_version": 1,
+        "package_name": artifact_slug,
+        "package_version": GENERATED_ARTIFACT_VERSION,
+        "built_at": _iso_now(),
+        "platform_compatibility": {"min_version": "1.0.0", "required_features": ["artifact_packages_v1"]},
+        "artifacts": [
+            {
+                **artifact_entry,
+                "artifact_hash": hashlib.sha256(files[artifact_zip_path]).hexdigest(),
+            }
+        ],
+        "checksums": {path: hashlib.sha256(content).hexdigest() for path, content in files.items()},
+    }
+    files["manifest.json"] = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    package_zip_path = package_root / "package.zip"
+    blob = io.BytesIO()
+    with zipfile.ZipFile(blob, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for path in sorted(files.keys()):
+            archive.writestr(path, files[path])
+    package_zip_path.write_bytes(blob.getvalue())
+    return {
+        "artifact_slug": artifact_slug,
+        "artifact_version": GENERATED_ARTIFACT_VERSION,
+        "artifact_manifest_path": str(artifact_manifest_path),
+        "artifact_package_path": str(package_zip_path),
+        "artifact_dir": str(package_root),
+        "runtime_config_path": str(runtime_config_path),
+        "app_spec_path": str(app_spec_path),
+        "package_size_bytes": package_zip_path.stat().st_size,
+    }
+
+
+def _import_generated_artifact_package_into_registry(
+    *,
+    container_name: str,
+    artifact_slug: str,
+    package_path: Path,
+    port: int = 8000,
+) -> dict[str, Any]:
+    if not package_path.exists():
+        raise RuntimeError(f"Generated artifact package not found: {package_path}")
+    if not artifact_slug.startswith("app."):
+        raise RuntimeError(f"Generated artifact slug must use app.* namespace: {artifact_slug}")
+    if not _docker_container_running(container_name):
+        raise RuntimeError(f"Platform API container is not running: {container_name}")
+    code, body, text = _container_http_session_upload_json(
+        container_name,
+        port=port,
+        upload_path="/xyn/api/artifacts/import",
+        file_field="file",
+        filename=package_path.name,
+        file_bytes=package_path.read_bytes(),
+    )
+    if code not in {200, 201}:
+        raise RuntimeError(f"Generated artifact import failed ({code}): {text}")
+    artifacts = body.get("artifacts") if isinstance(body.get("artifacts"), list) else []
+    imported = next((item for item in artifacts if isinstance(item, dict) and str(item.get("slug") or "") == artifact_slug), None)
+    if not isinstance(imported, dict):
+        raise RuntimeError(f"Generated artifact import response missing slug {artifact_slug}")
+    return {
+        "status": "imported",
+        "package": body.get("package") if isinstance(body.get("package"), dict) else {},
+        "receipt": body.get("receipt") if isinstance(body.get("receipt"), dict) else {},
+        "artifact": imported,
+    }
+
+
+def _import_generated_artifact_package(
+    *,
+    artifact_slug: str,
+    package_path: Path,
+) -> dict[str, Any]:
+    return _import_generated_artifact_package_into_registry(
+        container_name=ROOT_PLATFORM_API_CONTAINER,
+        artifact_slug=artifact_slug,
+        package_path=package_path,
+        port=8000,
+    )
+
+
+def _install_generated_artifact_in_sibling(
+    *,
+    sibling_api_container: str,
+    workspace_slug: str,
+    artifact_slug: str,
+    artifact_version: str = "",
+) -> dict[str, Any]:
+    code, body, text = _container_http_session_json(
+        sibling_api_container,
+        port=8000,
+        steps=[
+            {
+                "method": "POST",
+                "path": "/auth/dev-login",
+                "form": {"appId": "xyn-ui", "returnTo": "/app"},
+            },
+            {
+                "method": "GET",
+                "path": "/xyn/api/me",
+            },
+            {
+                "method": "GET",
+                "path": "/xyn/api/workspaces",
+            },
+        ],
+    )
+    if code != 200:
+        raise RuntimeError(f"Failed to enumerate sibling workspaces ({code}): {text}")
+    rows = body.get("workspaces") if isinstance(body.get("workspaces"), list) else []
+    workspace = next((row for row in rows if str(row.get("slug") or "").strip() == workspace_slug), None)
+    if not isinstance(workspace, dict):
+        raise RuntimeError(f"Sibling workspace with slug '{workspace_slug}' not found")
+    workspace_id = str(workspace.get("id") or "").strip()
+    if not workspace_id:
+        raise RuntimeError("Sibling workspace id missing from workspace list response")
+
+    install_code, install_body, install_text = _container_http_session_json(
+        sibling_api_container,
+        port=8000,
+        steps=[
+            {
+                "method": "POST",
+                "path": "/auth/dev-login",
+                "form": {"appId": "xyn-ui", "returnTo": "/app"},
+            },
+            {
+                "method": "POST",
+                "path": f"/xyn/api/workspaces/{workspace_id}/artifacts",
+                "body": {
+                    "artifact_id": artifact_slug,
+                    "artifact_version": artifact_version,
+                    "enabled": True,
+                },
+            },
+        ],
+    )
+    if install_code not in {200, 201}:
+        raise RuntimeError(f"Failed to install sibling artifact '{artifact_slug}' ({install_code}): {install_text}")
+    artifact = install_body.get("artifact") if isinstance(install_body.get("artifact"), dict) else {}
+    return {
+        "workspace_id": workspace_id,
+        "workspace_slug": workspace_slug,
+        "artifact_slug": str(artifact.get("slug") or artifact_slug),
+        "artifact_id": str(artifact.get("artifact_id") or ""),
+        "binding_id": str(artifact.get("binding_id") or ""),
+    }
+
+
+def _register_sibling_runtime_target(
+    *,
+    sibling_api_container: str,
+    workspace_id: str,
+    app_slug: str,
+    artifact_slug: str,
+    title: str,
+    runtime_target: dict[str, Any],
+) -> dict[str, Any]:
+    register_code, register_body, register_text = _container_http_session_json(
+        sibling_api_container,
+        port=8000,
+        steps=[
+            {
+                "method": "POST",
+                "path": "/auth/dev-login",
+                "form": {"appId": "xyn-ui", "returnTo": "/app"},
+            },
+            {
+                "method": "POST",
+                "path": f"/xyn/api/workspaces/{workspace_id}/app-runtime-targets",
+                "body": {
+                    "app_slug": app_slug,
+                    "artifact_slug": artifact_slug,
+                    "title": title,
+                    "runtime_target": runtime_target,
+                },
+            },
+        ],
+    )
+    if register_code not in {200, 201}:
+        raise RuntimeError(f"Failed to register sibling runtime target ({register_code}): {register_text}")
+    return register_body if isinstance(register_body, dict) else {}
+
+
+def _execute_sibling_palette_prompt(
+    *,
+    sibling_api_container: str,
+    workspace_slug: str,
+    prompt: str,
+) -> tuple[int, dict[str, Any], str]:
+    return _container_http_session_json(
+        sibling_api_container,
+        port=8000,
+        steps=[
+            {
+                "method": "POST",
+                "path": "/auth/dev-login",
+                "form": {"appId": "xyn-ui", "returnTo": "/app"},
+            },
+            {
+                "method": "POST",
+                "path": f"/xyn/api/palette/execute?workspace_slug={workspace_slug}",
+                "body": {"prompt": prompt, "workspace_slug": workspace_slug},
+            },
+        ],
+    )
 
 
 def _wait_for_container_http_ok(container_name: str, path: str, *, port: int, timeout_seconds: int = 60) -> bool:
@@ -267,12 +758,41 @@ def _docker_container_running(container_name: str) -> bool:
     code, stdout, _ = _run(["docker", "inspect", "-f", "{{.State.Running}}", container_name])
     return code == 0 and stdout.strip().lower() == "true"
 
+def _docker_network_exists(network_name: str) -> bool:
+    code, stdout, _ = _run(["docker", "network", "inspect", network_name])
+    return code == 0 and bool(stdout.strip())
 
-def _materialize_net_inventory_compose(*, app_spec: dict[str, Any], deployment_dir: Path, compose_project: str) -> Path:
+
+def _materialize_net_inventory_compose(
+    *,
+    app_spec: dict[str, Any],
+    deployment_dir: Path,
+    compose_project: str,
+    external_network_name: str | None = None,
+    external_network_alias: str | None = None,
+) -> Path:
     app_service = next((row for row in app_spec.get("services", []) if row.get("name") == "net-inventory-api"), {})
     db_service = next((row for row in app_spec.get("services", []) if row.get("name") == "net-inventory-db"), {})
     app_image = str(app_service.get("image") or NET_INVENTORY_IMAGE)
     app_ports = _ports_yaml(list(app_service.get("ports") or [{"host": 0, "container": 8080, "protocol": "tcp"}]))
+    app_network_lines: list[str] = []
+    trailer_lines: list[str] = []
+    if external_network_name:
+        alias = str(external_network_alias or f"{compose_project}-api").strip() or f"{compose_project}-api"
+        app_network_lines = [
+            "    networks:",
+            "      default:",
+            "      sibling-runtime:",
+            "        aliases:",
+            f"          - {alias}",
+        ]
+        trailer_lines = [
+            "",
+            "networks:",
+            "  sibling-runtime:",
+            "    external: true",
+            f"    name: {external_network_name}",
+        ]
     compose = deployment_dir / "docker-compose.yml"
     compose.write_text(
         "\n".join(
@@ -301,16 +821,69 @@ def _materialize_net_inventory_compose(*, app_spec: dict[str, Any], deployment_d
                 "      DATABASE_URL: postgresql://xyn:xyn_dev_password@net-inventory-db:5432/net_inventory",
                 "    ports:",
                 *app_ports,
+                *app_network_lines,
                 "    depends_on:",
                 "      net-inventory-db:",
                 "        condition: service_healthy",
                 "",
+                *trailer_lines,
             ]
         )
         + "\n",
         encoding="utf-8",
     )
     return compose
+
+
+def _deploy_generated_runtime(
+    *,
+    app_spec: dict[str, Any],
+    deployment_dir: Path,
+    compose_project: str,
+    logs: list[str],
+    external_network_name: str | None = None,
+    external_network_alias: str | None = None,
+) -> dict[str, Any]:
+    compose_path = _materialize_net_inventory_compose(
+        app_spec=app_spec,
+        deployment_dir=deployment_dir,
+        compose_project=compose_project,
+        external_network_name=external_network_name,
+        external_network_alias=external_network_alias,
+    )
+    _append_job_log(logs, f"Wrote compose: {compose_path}")
+
+    down_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "down", "--remove-orphans", "--volumes"]
+    up_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "up", "-d"]
+    down_code, down_stdout, down_stderr = _run(down_cmd, cwd=deployment_dir)
+    _append_job_log(logs, f"Executed: {' '.join(down_cmd)}")
+    if down_stdout:
+        _append_job_log(logs, f"compose down stdout: {down_stdout[-600:]}")
+    if down_stderr:
+        _append_job_log(logs, f"compose down stderr: {down_stderr[-600:]}")
+    code, stdout, stderr = _run(up_cmd, cwd=deployment_dir)
+    _append_job_log(logs, f"Executed: {' '.join(up_cmd)}")
+    if stdout:
+        _append_job_log(logs, f"compose stdout: {stdout[-600:]}")
+    if code != 0:
+        _run(["docker", "compose", "-p", compose_project, "-f", str(compose_path), "down", "--remove-orphans"], cwd=deployment_dir)
+        raise RuntimeError(f"docker compose up failed: {stderr or stdout}")
+    app_port = _resolve_published_port(f"{compose_project}-api", "8080/tcp")
+    alias = str(external_network_alias or f"{compose_project}-api").strip() or f"{compose_project}-api"
+    output = {
+        "compose_project": compose_project,
+        "deployment_dir": str(deployment_dir),
+        "compose_path": str(compose_path),
+        "app_container_name": f"{compose_project}-api",
+        "app_url": f"http://localhost:{app_port}",
+        "ports": {"app_tcp": app_port},
+    }
+    if external_network_name:
+        output["runtime_base_url"] = f"http://{alias}:8080"
+        output["runtime_owner"] = "sibling"
+        output["external_network"] = external_network_name
+        output["network_alias"] = alias
+    return output
 
 
 def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -356,18 +929,6 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
         metadata={"job_id": str(job.id)},
     )
     _append_job_log(logs, f"Persisted AppSpec artifact: {artifact_id}")
-    update_execution_note(
-        db,
-        artifact_id=note.id,
-        implementation_summary="Generated and validated AppSpec, then persisted it as an instance-local artifact for downstream deployment.",
-        validation_summary=[
-            "Primitive catalog loaded successfully.",
-            "AppSpec validated against xyn.appspec.v0 schema.",
-            f"AppSpec artifact persisted: {artifact_id}.",
-        ],
-        related_artifact_ids=[artifact_id],
-        extra_metadata_updates={"app_spec_artifact_id": artifact_id},
-    )
 
     selected_images = {svc.get("name"): svc.get("image") for svc in app_spec.get("services", []) if isinstance(svc, dict)}
     selected_ports = {
@@ -375,12 +936,69 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
         for svc in app_spec.get("services", [])
         if isinstance(svc, dict)
     }
+    generated_artifact_runtime_config = {
+        "app_slug": app_spec["app_slug"],
+        "artifact_slug": _generated_artifact_slug(str(app_spec.get("app_slug") or "generated-app")),
+        "artifact_version": GENERATED_ARTIFACT_VERSION,
+        "images": selected_images,
+        "ports": selected_ports,
+        "services": app_spec.get("services") if isinstance(app_spec.get("services"), list) else [],
+        "workspace_id": str(job.workspace_id),
+        "source_job_id": str(job.id),
+    }
+    packaged_artifact = _package_generated_app(
+        workspace_id=job.workspace_id,
+        source_job_id=str(job.id),
+        app_spec=app_spec,
+        runtime_config=generated_artifact_runtime_config,
+    )
+    _append_job_log(
+        logs,
+        f"Packaged generated artifact {packaged_artifact['artifact_slug']} at {packaged_artifact['artifact_package_path']}",
+    )
+    registry_artifact: dict[str, Any] = {}
+    registry_import_error = ""
+    try:
+        registry_artifact = _import_generated_artifact_package(
+            artifact_slug=str(packaged_artifact["artifact_slug"]),
+            package_path=Path(str(packaged_artifact["artifact_package_path"])),
+        )
+        _append_job_log(
+            logs,
+            f"Imported generated artifact {packaged_artifact['artifact_slug']} into Django registry",
+        )
+    except Exception as exc:
+        registry_import_error = f"{exc.__class__.__name__}: {exc}"
+        _append_job_log(logs, f"Generated artifact import fallback engaged: {registry_import_error}")
+    update_execution_note(
+        db,
+        artifact_id=note.id,
+        implementation_summary="Generated and validated AppSpec, persisted it as an instance-local artifact, and packaged the generated app as an importable Django artifact bundle.",
+        validation_summary=[
+            "Primitive catalog loaded successfully.",
+            "AppSpec validated against xyn.appspec.v0 schema.",
+            f"AppSpec artifact persisted: {artifact_id}.",
+            f"Generated artifact package created: {packaged_artifact['artifact_slug']}@{packaged_artifact['artifact_version']}.",
+            (
+                f"Generated artifact imported into registry: {packaged_artifact['artifact_slug']}"
+                if registry_artifact
+                else f"Generated artifact registry import deferred: {registry_import_error or 'unknown error'}."
+            ),
+        ],
+        related_artifact_ids=[artifact_id],
+        extra_metadata_updates={"app_spec_artifact_id": artifact_id},
+    )
     follow_up = [
         {
             "type": "deploy_app_local",
             "input_json": {
                 "app_spec": app_spec,
                 "app_spec_artifact_id": artifact_id,
+                "generated_artifact": {
+                    **packaged_artifact,
+                    "registry_import": registry_artifact,
+                    "registry_import_error": registry_import_error,
+                },
                 "execution_note_artifact_id": str(note.id),
                 "source_job_id": str(job.id),
             },
@@ -395,6 +1013,11 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
             "selected_images": selected_images,
             "selected_ports": selected_ports,
             "derived_urls": {"seed_ui": "http://localhost", "seed_api": "http://seed.localhost"},
+            "generated_artifact": {
+                **packaged_artifact,
+                "registry_import": registry_artifact,
+                "registry_import_error": registry_import_error,
+            },
             "execution_note_artifact_id": str(note.id),
         },
         follow_up,
@@ -404,40 +1027,21 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
 def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     payload = job.input_json or {}
     execution_note_artifact_id = str(payload.get("execution_note_artifact_id") or "").strip()
+    generated_artifact = payload.get("generated_artifact") if isinstance(payload.get("generated_artifact"), dict) else {}
     app_spec = payload.get("app_spec") if isinstance(payload.get("app_spec"), dict) else {}
     app_slug = _safe_slug(str(app_spec.get("app_slug") or "net-inventory"), default="net-inventory")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     deployment_dir = _deployments_root() / app_slug / stamp
     deployment_dir.mkdir(parents=True, exist_ok=True)
     compose_project = _safe_slug(f"xyn-app-{app_slug}", default="xyn-app")
-    compose_path = _materialize_net_inventory_compose(app_spec=app_spec, deployment_dir=deployment_dir, compose_project=compose_project)
-    _append_job_log(logs, f"Wrote compose: {compose_path}")
-
-    down_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "down", "--remove-orphans", "--volumes"]
-    up_cmd = ["docker", "compose", "-p", compose_project, "-f", str(compose_path), "up", "-d"]
-    down_code, down_stdout, down_stderr = _run(down_cmd, cwd=deployment_dir)
-    _append_job_log(logs, f"Executed: {' '.join(down_cmd)}")
-    if down_stdout:
-        _append_job_log(logs, f"compose down stdout: {down_stdout[-600:]}")
-    if down_stderr:
-        _append_job_log(logs, f"compose down stderr: {down_stderr[-600:]}")
-    code, stdout, stderr = _run(up_cmd, cwd=deployment_dir)
-    _append_job_log(logs, f"Executed: {' '.join(up_cmd)}")
-    if stdout:
-        _append_job_log(logs, f"compose stdout: {stdout[-600:]}")
-    if code != 0:
-        _run(["docker", "compose", "-p", compose_project, "-f", str(compose_path), "down", "--remove-orphans"], cwd=deployment_dir)
-        raise RuntimeError(f"docker compose up failed: {stderr or stdout}")
-
-    app_port = _resolve_published_port(f"{compose_project}-api", "8080/tcp")
     app_output = {
         "app_slug": app_slug,
-        "compose_project": compose_project,
-        "deployment_dir": str(deployment_dir),
-        "compose_path": str(compose_path),
-        "app_container_name": f"{compose_project}-api",
-        "app_url": f"http://localhost:{app_port}",
-        "ports": {"app_tcp": app_port},
+        **_deploy_generated_runtime(
+            app_spec=app_spec,
+            deployment_dir=deployment_dir,
+            compose_project=compose_project,
+            logs=logs,
+        ),
     }
     if execution_note_artifact_id:
         update_execution_note(
@@ -445,7 +1049,7 @@ def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[di
             artifact_id=uuid.UUID(execution_note_artifact_id),
             implementation_summary="Materialized local docker-compose deployment for the generated app and resolved a running app URL.",
             append_validation=[
-                f"Compose written: {compose_path}",
+                f"Compose written: {app_output['compose_path']}",
                 f"Local deployment started successfully at {app_output['app_url']}.",
             ],
             related_artifact_ids=[
@@ -461,6 +1065,7 @@ def _handle_deploy_app_local(db: Session, job: Job, logs: list[str]) -> tuple[di
             "input_json": {
                 "deployment": app_output,
                 "app_spec": app_spec,
+                "generated_artifact": generated_artifact,
                 "execution_note_artifact_id": execution_note_artifact_id,
                 "source_job_id": str(job.id),
             },
@@ -499,6 +1104,105 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
         "ui_url": sibling.get("ui_url"),
         "api_url": sibling.get("api_url"),
     }
+    sibling_project = str(sibling.get("compose_project") or "").strip()
+    sibling_api_container = f"{sibling_project}-api" if sibling_project else ""
+    sibling_network = f"{sibling_project}_default" if sibling_project else ""
+    installed_artifact: dict[str, Any] | None = None
+    sibling_runtime: dict[str, Any] | None = None
+    sibling_registry_import: dict[str, Any] = {}
+    generated_artifact = payload.get("generated_artifact") if isinstance(payload.get("generated_artifact"), dict) else {}
+    if sibling_api_container and _docker_container_running(sibling_api_container):
+        preferred_artifact_slug = str(generated_artifact.get("artifact_slug") or "").strip()
+        preferred_artifact_version = str(generated_artifact.get("artifact_version") or "").strip()
+        preferred_artifact_package_path = Path(str(generated_artifact.get("artifact_package_path") or "")).expanduser()
+        installed_from_generated = False
+        if preferred_artifact_slug and preferred_artifact_package_path.exists():
+            try:
+                sibling_registry_import = _import_generated_artifact_package_into_registry(
+                    container_name=sibling_api_container,
+                    artifact_slug=preferred_artifact_slug,
+                    package_path=preferred_artifact_package_path,
+                    port=8000,
+                )
+                _append_job_log(
+                    logs,
+                    f"Imported generated artifact {preferred_artifact_slug}@{preferred_artifact_version or GENERATED_ARTIFACT_VERSION} into sibling registry",
+                )
+                installed_artifact = _install_generated_artifact_in_sibling(
+                    sibling_api_container=sibling_api_container,
+                    workspace_slug=workspace_slug,
+                    artifact_slug=preferred_artifact_slug,
+                    artifact_version=preferred_artifact_version,
+                )
+                installed_from_generated = True
+                _append_job_log(
+                    logs,
+                    f"Installed generated artifact {preferred_artifact_slug}@{preferred_artifact_version or 'latest'} into sibling workspace",
+                )
+            except Exception as exc:
+                _append_job_log(
+                    logs,
+                    f"Generated artifact install failed for {preferred_artifact_slug}@{preferred_artifact_version or 'latest'}; falling back to bridge artifact: {exc}",
+                )
+        if not installed_artifact:
+            # Temporary bridge fallback: the sibling installs the packaged Django-side
+            # net-inventory artifact for capability counting and UI visibility.
+            # This remains only until generated artifacts are promoted/imported/installed natively.
+            installed_artifact = _install_generated_artifact_in_sibling(
+                sibling_api_container=sibling_api_container,
+                workspace_slug=workspace_slug,
+                artifact_slug="net-inventory",
+            )
+        sibling_output["installed_artifact"] = installed_artifact
+        sibling_output["installed_artifact_source"] = "generated" if installed_from_generated else "bridge_fallback"
+        if sibling_registry_import:
+            sibling_output["generated_artifact_registry_import"] = sibling_registry_import
+        _append_job_log(
+            logs,
+            "Installed sibling artifact "
+            f"workspace={installed_artifact.get('workspace_slug')} artifact={installed_artifact.get('artifact_slug')} "
+            f"source={'generated' if installed_from_generated else 'bridge_fallback'}",
+        )
+        app_spec = payload.get("app_spec") if isinstance(payload.get("app_spec"), dict) else {}
+        app_slug = _safe_slug(str(app_spec.get("app_slug") or "net-inventory"), default="net-inventory")
+        if not sibling_network or not _docker_network_exists(sibling_network):
+            raise RuntimeError(f"Sibling network not available for runtime target registration: {sibling_network or '<empty>'}")
+        sibling_stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        sibling_runtime_project = _safe_slug(f"xyn-sibling-{app_slug}-{str(job.id)[:6]}", default="xyn-sibling-app")
+        sibling_runtime_dir = _deployments_root() / app_slug / f"sibling-{sibling_stamp}-{str(job.id)[:6]}"
+        sibling_runtime_dir.mkdir(parents=True, exist_ok=True)
+        sibling_runtime = _deploy_generated_runtime(
+            app_spec=app_spec,
+            deployment_dir=sibling_runtime_dir,
+            compose_project=sibling_runtime_project,
+            logs=logs,
+            external_network_name=sibling_network,
+            external_network_alias=f"{sibling_runtime_project}-api",
+        )
+        sibling_runtime.update(
+            {
+                "app_slug": app_slug,
+                "runtime_owner": "sibling",
+                "source_build_job_id": str(payload.get("source_job_id") or ""),
+                "source_workspace_id": str(job.workspace_id),
+                "bridge_artifact_slug": installed_artifact.get("artifact_slug"),
+            }
+        )
+        registration = _register_sibling_runtime_target(
+            sibling_api_container=sibling_api_container,
+            workspace_id=str(installed_artifact.get("workspace_id") or ""),
+            app_slug=app_slug,
+            artifact_slug=str(installed_artifact.get("artifact_slug") or "net-inventory"),
+            title=str(app_spec.get("title") or app_slug),
+            runtime_target=sibling_runtime,
+        )
+        sibling_output["runtime_target"] = sibling_runtime
+        sibling_output["runtime_registration"] = registration
+        _append_job_log(
+            logs,
+            "Registered sibling-owned runtime target "
+            f"base_url={sibling_runtime.get('runtime_base_url')} workspace={installed_artifact.get('workspace_slug')}",
+        )
     if execution_note_artifact_id:
         update_execution_note(
             db,
@@ -507,10 +1211,23 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
             append_validation=[
                 f"Sibling Xyn provisioned with ui_url={sibling_output.get('ui_url')}",
                 f"Sibling Xyn provisioned with api_url={sibling_output.get('api_url')}",
+                (
+                    f"Installed generated artifact {installed_artifact.get('artifact_slug')} into sibling workspace "
+                    f"{installed_artifact.get('workspace_slug')}"
+                    if installed_artifact
+                    else "No sibling artifact installation was recorded."
+                ),
+                (
+                    f"Registered sibling-owned runtime target {sibling_runtime.get('runtime_base_url')}"
+                    if sibling_runtime
+                    else "No sibling-owned runtime target was registered."
+                ),
             ],
             extra_metadata_updates={
                 "sibling_ui_url": sibling_output.get("ui_url"),
                 "sibling_api_url": sibling_output.get("api_url"),
+                "sibling_installed_artifact_slug": installed_artifact.get("artifact_slug") if installed_artifact else None,
+                "sibling_runtime_base_url": sibling_runtime.get("runtime_base_url") if sibling_runtime else None,
             },
         )
     follow_up = [
@@ -519,6 +1236,7 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
             "input_json": {
                 "deployment": deployment,
                 "sibling": sibling_output,
+                "generated_artifact": generated_artifact,
                 "execution_note_artifact_id": execution_note_artifact_id,
                 "source_job_id": str(job.id),
             },
@@ -532,6 +1250,7 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
     execution_note_artifact_id = str(payload.get("execution_note_artifact_id") or "").strip()
     deployment = payload.get("deployment") if isinstance(payload.get("deployment"), dict) else {}
     sibling = payload.get("sibling") if isinstance(payload.get("sibling"), dict) else {}
+    generated_artifact = payload.get("generated_artifact") if isinstance(payload.get("generated_artifact"), dict) else {}
     app_container_name = str(deployment.get("app_container_name") or "").strip()
     if not app_container_name:
         raise RuntimeError("smoke_test missing deployment.app_container_name")
@@ -601,6 +1320,44 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
     if report_code != 200:
         raise RuntimeError(f"GET /reports/devices-by-status failed ({report_code}): {report_text}")
 
+    generated_artifact_slug = str(generated_artifact.get("artifact_slug") or "").strip()
+    generated_artifact_version = str(generated_artifact.get("artifact_version") or "").strip()
+    registry_catalog: dict[str, Any] = {}
+    if generated_artifact_slug:
+        registry_status, registry_body, registry_text = _container_http_session_json(
+            ROOT_PLATFORM_API_CONTAINER,
+            port=8000,
+            steps=[
+                {
+                    "method": "POST",
+                    "path": "/auth/dev-login",
+                    "form": {"appId": "xyn-ui", "returnTo": "/app"},
+                },
+                {
+                    "method": "GET",
+                    "path": "/xyn/api/artifacts/catalog?include_bridge=1",
+                },
+            ],
+        )
+        if registry_status != 200:
+            raise RuntimeError(f"Registry catalog check failed ({registry_status}): {registry_text}")
+        registry_rows = registry_body.get("artifacts") if isinstance(registry_body.get("artifacts"), list) else []
+        registry_match = next(
+            (
+                row
+                for row in registry_rows
+                if isinstance(row, dict)
+                and str(row.get("slug") or "").strip() == generated_artifact_slug
+                and str(row.get("package_version") or "").strip() == generated_artifact_version
+            ),
+            None,
+        )
+        if not isinstance(registry_match, dict):
+            raise RuntimeError(
+                f"Generated artifact {generated_artifact_slug}@{generated_artifact_version} not found in registry catalog"
+            )
+        registry_catalog = registry_match
+
     sibling_project = str(sibling.get("compose_project") or "").strip()
     sibling_api_container = f"{sibling_project}-api" if sibling_project else ""
     sibling_ui_container = f"{sibling_project}-ui" if sibling_project else ""
@@ -621,18 +1378,143 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
     if sibling_health_code != 200:
         raise RuntimeError(f"Sibling API health check failed ({code}): {text}")
     _append_job_log(logs, f"Sibling health OK: {sibling.get('api_url')}")
-
-    palette_result = execute_palette_prompt(
-        db,
-        prompt="show devices",
-        workspace_id=job.workspace_id,
-        workspace_slug=workspace_slug,
+    sibling_runtime = sibling.get("runtime_target") if isinstance(sibling.get("runtime_target"), dict) else {}
+    sibling_runtime_container = str(sibling_runtime.get("app_container_name") or "").strip()
+    sibling_runtime_base_url = str(sibling_runtime.get("runtime_base_url") or "").strip()
+    sibling_workspace_id = str((sibling.get("installed_artifact") or {}).get("workspace_id") or "").strip()
+    sibling_workspace_slug = str((sibling.get("installed_artifact") or {}).get("workspace_slug") or workspace_slug).strip() or workspace_slug
+    if not sibling_runtime_container or not _docker_container_running(sibling_runtime_container):
+        raise RuntimeError("Sibling runtime container is not running")
+    if not sibling_workspace_id:
+        raise RuntimeError("Sibling installed artifact workspace id missing")
+    if not _wait_for_container_http_ok(sibling_runtime_container, "/health", port=8080, timeout_seconds=APP_DEPLOY_HEALTH_TIMEOUT_SECONDS):
+        raise RuntimeError(f"Sibling runtime health endpoint did not become ready in {sibling_runtime_container}")
+    sibling_runtime_health_code, sibling_runtime_health_body, sibling_runtime_health_text = _container_http_json(
+        sibling_runtime_container,
+        "GET",
+        "/health",
+        port=8080,
     )
+    if sibling_runtime_health_code != 200:
+        raise RuntimeError(f"Sibling runtime health check failed ({sibling_runtime_health_code}): {sibling_runtime_health_text}")
+    sibling_artifacts_status, sibling_artifacts_body, sibling_artifacts_text = _container_http_session_json(
+        sibling_api_container,
+        port=8000,
+        steps=[
+            {
+                "method": "POST",
+                "path": "/auth/dev-login",
+                "form": {"appId": "xyn-ui", "returnTo": "/app"},
+            },
+            {
+                "method": "GET",
+                "path": f"/xyn/api/workspaces/{sibling_workspace_id}/artifacts",
+            },
+        ],
+    )
+    if sibling_artifacts_status != 200:
+        raise RuntimeError(f"Sibling artifact listing failed ({sibling_artifacts_status}): {sibling_artifacts_text}")
+    sibling_artifacts = sibling_artifacts_body.get("artifacts") if isinstance(sibling_artifacts_body.get("artifacts"), list) else []
+    if generated_artifact_slug:
+        sibling_match = next(
+            (
+                row
+                for row in sibling_artifacts
+                if isinstance(row, dict)
+                and str(row.get("slug") or "").strip() == generated_artifact_slug
+                and str(row.get("package_version") or "").strip() == generated_artifact_version
+            ),
+            None,
+        )
+        if not isinstance(sibling_match, dict):
+            raise RuntimeError(
+                f"Sibling workspace is missing generated artifact {generated_artifact_slug}@{generated_artifact_version}"
+            )
+    sibling_location_code, sibling_location_body, sibling_location_text = _container_http_json(
+        sibling_runtime_container,
+        "POST",
+        "/locations",
+        port=8080,
+        payload={
+            "workspace_id": sibling_workspace_id,
+            "name": "sibling-location-1",
+            "kind": "site",
+            "city": "Austin",
+        },
+    )
+    if sibling_location_code not in {200, 201}:
+        raise RuntimeError(f"Sibling POST /locations failed ({sibling_location_code}): {sibling_location_text}")
+    sibling_location_id = str(sibling_location_body.get("id") or "").strip() if isinstance(sibling_location_body, dict) else ""
+    sibling_create_code, sibling_create_body, sibling_create_text = _container_http_json(
+        sibling_runtime_container,
+        "POST",
+        "/devices",
+        port=8080,
+        payload={
+            "workspace_id": sibling_workspace_id,
+            "name": "sibling-device-1",
+            "kind": "router",
+            "status": "online",
+            "location_id": sibling_location_id or None,
+        },
+    )
+    if sibling_create_code not in {200, 201}:
+        raise RuntimeError(f"Sibling POST /devices failed ({sibling_create_code}): {sibling_create_text}")
+
+    palette_status, palette_result, palette_text = _execute_sibling_palette_prompt(
+        sibling_api_container=sibling_api_container,
+        workspace_slug=sibling_workspace_slug,
+        prompt="show devices",
+    )
+    if palette_status != 200:
+        raise RuntimeError(f"Sibling palette request failed ({palette_status}): {palette_text}")
     if palette_result.get("kind") != "table":
         raise RuntimeError(f"Palette did not return table: {palette_result}")
     if not isinstance(palette_result.get("rows"), list) or not palette_result.get("rows"):
         raise RuntimeError("Palette show devices returned no rows")
+    palette_meta = palette_result.get("meta") if isinstance(palette_result.get("meta"), dict) else {}
+    if sibling_runtime_base_url and str(palette_meta.get("base_url") or "").strip() != sibling_runtime_base_url:
+        raise RuntimeError(
+            f"Sibling palette targeted unexpected runtime base URL: {palette_meta.get('base_url')} != {sibling_runtime_base_url}"
+        )
     _append_job_log(logs, f"Palette check returned {len(palette_result.get('rows') or [])} rows")
+
+    stopped_root_runtime = {"status": "skipped"}
+    restarted_root_runtime = {"status": "skipped"}
+    palette_after_root_stop: dict[str, Any] = {}
+    compose_path = Path(str(deployment.get("compose_path") or "").strip())
+    compose_project = str(deployment.get("compose_project") or "").strip()
+    if compose_path.exists() and compose_project:
+        stop_code, stop_out, stop_err = _run(["docker", "compose", "-p", compose_project, "-f", str(compose_path), "stop"])
+        if stop_code != 0:
+            raise RuntimeError(f"Failed to stop root runtime during smoke validation: {stop_err or stop_out}")
+        stopped_root_runtime = {"status": "stopped", "stdout": stop_out, "stderr": stop_err}
+        try:
+            palette_after_stop_status, palette_after_stop_result, palette_after_stop_text = _execute_sibling_palette_prompt(
+                sibling_api_container=sibling_api_container,
+                workspace_slug=sibling_workspace_slug,
+                prompt="show devices",
+            )
+            if palette_after_stop_status != 200:
+                raise RuntimeError(
+                    f"Sibling palette after root stop failed ({palette_after_stop_status}): {palette_after_stop_text}"
+                )
+            if not isinstance(palette_after_stop_result.get("rows"), list) or not palette_after_stop_result.get("rows"):
+                raise RuntimeError("Sibling palette after root stop returned no rows")
+            after_stop_meta = palette_after_stop_result.get("meta") if isinstance(palette_after_stop_result.get("meta"), dict) else {}
+            if sibling_runtime_base_url and str(after_stop_meta.get("base_url") or "").strip() != sibling_runtime_base_url:
+                raise RuntimeError(
+                    "Sibling palette after root stop targeted unexpected runtime base URL: "
+                    f"{after_stop_meta.get('base_url')} != {sibling_runtime_base_url}"
+                )
+            palette_after_root_stop = palette_after_stop_result
+        finally:
+            restart_code, restart_out, restart_err = _run(["docker", "compose", "-p", compose_project, "-f", str(compose_path), "up", "-d"])
+            restarted_root_runtime = {"status": "restarted" if restart_code == 0 else "failed", "stdout": restart_out, "stderr": restart_err}
+            if restart_code != 0:
+                raise RuntimeError(f"Failed to restart root runtime after smoke validation: {restart_err or restart_out}")
+            if not _wait_for_container_http_ok(app_container_name, "/health", port=8080, timeout_seconds=APP_DEPLOY_HEALTH_TIMEOUT_SECONDS):
+                raise RuntimeError("Root runtime did not become healthy after restart")
     if execution_note_artifact_id:
         update_execution_note(
             db,
@@ -643,7 +1525,14 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "Location CRUD smoke checks succeeded.",
                 "Device CRUD smoke checks succeeded.",
                 "Sibling Xyn health check succeeded.",
+                "Sibling runtime health endpoint returned 200.",
+                "Sibling runtime location/device CRUD smoke checks succeeded.",
                 f"Palette returned {len(palette_result.get('rows') or [])} rows for show devices.",
+                (
+                    f"Sibling palette still returned {len(palette_after_root_stop.get('rows') or [])} rows after root runtime stop."
+                    if palette_after_root_stop
+                    else "Sibling palette was not revalidated after root runtime stop."
+                ),
             ],
             status="completed",
         )
@@ -659,8 +1548,22 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "report_devices_by_status": {"code": report_code, "body": report_body or report_text},
             },
             "sibling_health": {"code": sibling_health_code, "body": sibling_health_body or sibling_health_text},
+            "sibling_runtime": {
+                "base_url": sibling_runtime_base_url,
+                "health": {"code": sibling_runtime_health_code, "body": sibling_runtime_health_body or sibling_runtime_health_text},
+                "create_location": {"code": sibling_location_code, "body": sibling_location_body or sibling_location_text},
+                "create_device": {"code": sibling_create_code, "body": sibling_create_body or sibling_create_text},
+            },
             "sibling_xyn": sibling,
+            "generated_artifact": {
+                "registry_catalog": registry_catalog,
+                "installed_in_sibling": generated_artifact_slug,
+                "installed_version": generated_artifact_version,
+            },
             "palette": palette_result,
+            "palette_after_root_runtime_stop": palette_after_root_stop,
+            "root_runtime_stop": stopped_root_runtime,
+            "root_runtime_restart": restarted_root_runtime,
             "status": "passed",
         },
         [],
