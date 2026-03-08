@@ -46,11 +46,11 @@ Current Status: partially addressed
 Next Action: keep the Draft Detail surface and browser rehearsal centered on installed capability visibility, palette operation, and artifacts/reports inside Xyn.
 
 DEMO-03  
-Title: Sibling Xyn does not yet install the generated app as an artifact  
-Description: The sibling instance is provisioned, but the generated app is not yet consumed through an artifact install flow inside that sibling.  
-Impact on Demo: Breaks the architectural claim that everything is an artifact and risks confusion during the demo.  
+Title: Sibling generated artifact is installed, but not yet capability-native  
+Description: The sibling instance now installs the generated artifact `app.net-inventory`, but that imported artifact does not yet carry the capability metadata, suggestions, and surface definitions needed for the sibling UI/capability model to treat it as the primary installed capability.  
+Impact on Demo: The install identity is now correct, but the platform story is still weakened because the sibling UI and capability model are not yet fully driven by the generated artifact itself.  
 Current Status: partially addressed  
-Next Action: the sibling now receives an explicit `net-inventory` workspace artifact binding after provision and executes commands against its own sibling-owned runtime target. The broader generated-app publish/import/install pipeline still needs to replace this narrow bridge before demo freeze.
+Next Action: preserve the current generated-artifact install path, but make the imported generated artifact carry the capability metadata, palette suggestions, and surfaces needed for sibling UI/capability behavior before bridge cleanup.
 
 DEMO-04  
 Title: Legacy UI leakage remains possible on parts of the demo path  
@@ -87,7 +87,7 @@ Task Name: Bridge generated app into sibling Xyn install story
 Why It Matters for Demo: The sibling instance must demonstrate artifact-aware installation rather than disconnected provisioning.  
 Owner: Codex  
 Status: in-progress  
-Notes: Keep scope minimal; do not overreach into the full publish/import system unless required. Fresh validation on 2026-03-08 confirmed that the generated package `app.net-inventory@0.0.1-dev` is now imported into the root Django registry, re-imported into the sibling Django registry, and installed in the sibling workspace before runtime registration. The sibling workspace artifact list now includes `app.net-inventory` instead of relying solely on the seeded `net-inventory` bridge for install identity. Generic catalog/detail flows still hide the seeded `net-inventory` bridge artifact unless it is workspace-installed or explicitly requested with `include_bridge=1`. The broader generated-app publish/import lifecycle is still incomplete, but sibling palette execution now targets a sibling-owned runtime record stored on `WorkspaceAppInstance` and continues to return device rows after the root-local `xyn-app-net-inventory-*` containers are stopped.
+Notes: Keep scope minimal; do not overreach into the full publish/import system unless required. Fresh validation on 2026-03-08 confirmed that the generated package `app.net-inventory@0.0.1-dev` is now imported into the root Django registry, re-imported into the sibling Django registry, and installed in the sibling workspace before runtime registration. The sibling workspace artifact list now includes `app.net-inventory` instead of relying solely on the seeded `net-inventory` bridge for install identity. Generic catalog/detail flows still hide the seeded `net-inventory` bridge artifact unless it is workspace-installed or explicitly requested with `include_bridge=1`. The broader generated-app publish/import lifecycle is still incomplete, and the imported generated artifact currently lands as `capability.visibility=hidden` with no suggestions or surfaces, so sibling capability count and capability UI are still not driven by the generated artifact itself.
 
 TASK-04  
 Task Name: Stabilize prompt-driven build tracking UX  

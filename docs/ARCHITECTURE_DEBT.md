@@ -12,11 +12,11 @@ Risk: Runtime consumption and governance remain connected by a sync contract rat
 Planned Resolution: Replace the synced manifest bridge with published/synced context-pack artifacts that `xyn-core` imports explicitly.
 
 DEBT-02  
-Title: Sibling install flow is not artifact-based yet  
-Description: Sibling Xyn instances are provisioned separately from generated app artifact installation, so the reproduction story is not yet fully artifact-native.  
-Why It Exists: The publish/import/install pipeline for generated apps has not been implemented yet.  
-Risk: Deployment state and installed-artifact state can drift, weakening the core architectural claim.  
-Planned Resolution: Promote generated apps to published/synced artifacts and install them into the sibling through an explicit import/install flow.
+Title: Sibling generated-artifact install is partial  
+Description: Sibling Xyn instances now import and install a generated artifact (`app.net-inventory`) before runtime registration, but the generated artifact does not yet carry the capability metadata, suggestions, and surfaces needed for the sibling UI/capability model to rely on it as the primary source of truth. The seeded `net-inventory` bridge artifact remains as fallback-only compatibility.  
+Why It Exists: This is the smallest safe step toward generated artifact install without implementing the full publish/import/install lifecycle or redesigning package metadata ingestion.  
+Risk: Installed-artifact identity, capability UX, and bridge compatibility can still drift because the generated artifact is not yet capability-native.  
+Planned Resolution: Make generated artifact imports preserve capability/suggestion/surface metadata and then remove the seeded bridge fallback once sibling UI/capability behavior is fully driven by `app.<slug>`.
 
 DEBT-03  
 Title: Clean-baseline migrations are stronger than dirty-dev migration recovery  
