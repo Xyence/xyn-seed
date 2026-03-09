@@ -61,6 +61,38 @@ Risk: Identity and orchestration logic remain split across AppSpec and generated
 Planned Resolution: Evaluate a future artifact-first build model of `Prompt -> ArtifactSpec -> Artifact -> WorkspaceArtifactBinding -> WorkspaceAppInstance -> runtime_target` that preserves the current artifact packaging model, registry install semantics, WorkspaceAppInstance runtime targeting, and compatibility with existing artifacts.  
 Status: Future simplification opportunity. Not required for demo readiness.
 
+DEBT-08  
+Title: Generalized evolved-feature materialization remains narrow  
+Description: The validated evolution path now materializes the `interfaces` entity and `interfaces by status` reporting into generated artifact metadata, sibling runtime behavior, and palette-visible functionality. That materialization logic is still relatively specific to the currently validated scenario rather than a broadly generalized entity/report expansion mechanism.  
+Why It Exists: The current implementation prioritized the smallest safe fix needed to make the demo-ready create-and-extend path work end to end without redesigning the app-generation or runtime-materialization system.  
+Risk: Future evolved entities or reports beyond the validated interfaces path may require additional targeted materialization work before they become runtime-facing functionality.  
+Planned Resolution: Generalize the AppSpec-to-runtime materialization layer so newly added entities, palette commands, and reports derive systematically from generated artifact/application definition state rather than relying on scenario-specific expansion logic.  
+Status: Future hardening opportunity. Not required for demo readiness.
+
+DEBT-09  
+Title: Generated artifact promotion and version semantics remain minimal  
+Description: Generated artifacts now serve as the canonical installed identity in the happy path, but their versioning and promotion semantics remain intentionally lightweight (for example `0.0.1-dev` re-import/update behavior) rather than a fuller lifecycle with stronger revision, release, and promotion rules.  
+Why It Exists: Demo readiness required a working artifact-native path before a broader artifact release model was designed.  
+Risk: Long-term lifecycle behavior for generated apps may remain ambiguous around revisions, releases, and promotion boundaries if this is not tightened later.  
+Planned Resolution: Define stronger generated-artifact version/update/promotion semantics that preserve the current packaging/import/install model while making revision and release behavior explicit.  
+Status: Future hardening opportunity. Not required for demo readiness.
+
+DEBT-10  
+Title: Dedicated revision-history UI is not yet implemented  
+Description: The UI now exposes the originating prompt, application definition, generated artifact identity, and a working `Revise application` entry point, but it does not yet provide a dedicated revision-history timeline or revision list for generated apps.  
+Why It Exists: The current demo path only needed a clear definition/revise story, not a broader history-management surface.  
+Risk: Post-demo product workflows may need a clearer revision audit/history experience than the current single-definition view.  
+Planned Resolution: Add a dedicated revision-history surface when product scope allows, reusing existing stored draft/build/artifact lineage rather than introducing a parallel history model.  
+Status: Future UX expansion. Not required for demo readiness.
+
+DEBT-11  
+Title: Django test DB regression environment remains fragile  
+Description: Browser-driven regression coverage now passes for the demo path, but there is still a known unrelated Django test DB issue that can interfere with some in-container regression execution and make lower-level automated coverage less robust than it should be.  
+Why It Exists: Demo-focused validation prioritized browser truth and live-system validation over deeper cleanup of the Django test DB environment.  
+Risk: Some automated regression runs may remain noisier or less reliable than desired until the test DB issue is fixed.  
+Planned Resolution: Repair the Django test DB setup so containerized regression and lower-level automated test execution can run consistently without unrelated database-trigger failures.  
+Status: Future test-hardening opportunity. Not required for demo readiness.
+
 # Temporary Workarounds Protocol
 
 Whenever a temporary workaround is introduced, record:
