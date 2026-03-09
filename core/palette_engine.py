@@ -275,6 +275,80 @@ def execute_palette_prompt(
             },
         }
 
+    # Create flows should return the refreshed collection so the visible table
+    # stays representative of current state instead of collapsing to just the
+    # newly-created row.
+    if command.command_key == "create device":
+        list_code, list_body, list_raw = (
+            deployment_request_json(
+                deployment=deployment,
+                method="GET",
+                path="/devices",
+                query={"workspace_id": str(workspace.id)},
+                payload=None,
+            )
+            if deployment is not None and str(base_url).rstrip("/") == str(deployment.get("app_url") or "").rstrip("/")
+            else http_request_json(
+                f"{base_url}/devices?{urlencode({'workspace_id': str(workspace.id)})}",
+                "GET",
+                payload=None,
+            )
+        )
+        if 200 <= list_code < 300:
+            items = list_body if isinstance(list_body, list) else (list_body.get("items") if isinstance(list_body, dict) and isinstance(list_body.get("items"), list) else [])
+            result = build_palette_result_from_items(
+                items=[row for row in items if isinstance(row, dict)],
+                columns=["id", "name", "kind", "status", "location_id"],
+                text_template=f"Created 1 device: {str(resolved_body.get('name') or 'unknown')}",
+            )
+            result["kind"] = "table"
+            result["meta"] = {
+                "workspace_id": str(workspace.id),
+                "workspace_slug": workspace.slug,
+                "command_id": str(command.id),
+                "command_key": command.command_key,
+                "base_url": base_url,
+                "context_pack_artifact_ids": [str(pack.id) for pack in context_packs],
+                "context_pack_slugs": [str((pack.extra_metadata or {}).get("pack_slug") or pack.name) for pack in context_packs],
+                "context_warnings": context_warnings,
+            }
+            return result
+    if command.command_key == "create location":
+        list_code, list_body, list_raw = (
+            deployment_request_json(
+                deployment=deployment,
+                method="GET",
+                path="/locations",
+                query={"workspace_id": str(workspace.id)},
+                payload=None,
+            )
+            if deployment is not None and str(base_url).rstrip("/") == str(deployment.get("app_url") or "").rstrip("/")
+            else http_request_json(
+                f"{base_url}/locations?{urlencode({'workspace_id': str(workspace.id)})}",
+                "GET",
+                payload=None,
+            )
+        )
+        if 200 <= list_code < 300:
+            items = list_body if isinstance(list_body, list) else (list_body.get("items") if isinstance(list_body, dict) and isinstance(list_body.get("items"), list) else [])
+            result = build_palette_result_from_items(
+                items=[row for row in items if isinstance(row, dict)],
+                columns=["id", "name", "kind", "city", "region", "country"],
+                text_template=f"Created 1 location: {str(resolved_body.get('name') or 'unknown')}",
+            )
+            result["kind"] = "table"
+            result["meta"] = {
+                "workspace_id": str(workspace.id),
+                "workspace_slug": workspace.slug,
+                "command_id": str(command.id),
+                "command_key": command.command_key,
+                "base_url": base_url,
+                "context_pack_artifact_ids": [str(pack.id) for pack in context_packs],
+                "context_pack_slugs": [str((pack.extra_metadata or {}).get("pack_slug") or pack.name) for pack in context_packs],
+                "context_warnings": context_warnings,
+            }
+            return result
+
     kind = str(adapter.get("kind") or "table")
     text_template = str(adapter.get("text_template") or "{{count}} rows")
     if kind == "bar_chart":
