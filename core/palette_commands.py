@@ -87,6 +87,36 @@ def ensure_default_palette_commands(db: Session) -> None:
                 },
             },
         ),
+        (
+            "show interfaces",
+            {
+                "base_url": "$deployment.app_url",
+                "method": "GET",
+                "path": "/interfaces",
+                "query_map": {"workspace_id": "$workspace_id"},
+                "response_adapter": {
+                    "kind": "table",
+                    "columns": ["id", "device_id", "name", "status", "workspace_id"],
+                    "text_template": "{{count}} interfaces found",
+                },
+            },
+        ),
+        (
+            "show interfaces by status",
+            {
+                "base_url": "$deployment.app_url",
+                "method": "GET",
+                "path": "/reports/interfaces-by-status",
+                "query_map": {"workspace_id": "$workspace_id"},
+                "response_adapter": {
+                    "kind": "bar_chart",
+                    "label_field": "status",
+                    "value_field": "count",
+                    "title": "Interfaces by status",
+                    "text_template": "{{count}} interface status buckets found",
+                },
+            },
+        ),
     ]
     changed = False
     for key, config in defaults:

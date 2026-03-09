@@ -8,6 +8,7 @@ Executes queued jobs:
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import subprocess
@@ -312,6 +313,70 @@ def _build_generated_artifact_manifest(*, app_spec: dict[str, Any], runtime_conf
     app_slug = _safe_slug(str(app_spec.get("app_slug") or "generated-app"), default="generated-app")
     artifact_slug = _generated_artifact_slug(app_slug)
     title = str(app_spec.get("title") or app_slug).strip() or app_slug
+    entities = _infer_entities_from_app_spec(app_spec)
+    reports = _normalize_unique_strings(app_spec.get("reports") if isinstance(app_spec.get("reports"), list) else [])
+    suggestions = [
+        {
+            "id": f"{artifact_slug}-show-devices",
+            "name": "Show Devices",
+            "prompt": "Show devices",
+            "description": "List devices in the current workspace.",
+            "visibility": ["capability", "landing", "palette"],
+            "group": "Devices",
+            "order": 100,
+        },
+        {
+            "id": f"{artifact_slug}-show-locations",
+            "name": "Show Locations",
+            "prompt": "Show locations",
+            "description": "List locations in the current workspace.",
+            "visibility": ["capability", "palette"],
+            "group": "Locations",
+            "order": 110,
+        },
+        {
+            "id": f"{artifact_slug}-create-device",
+            "name": "Create Device",
+            "prompt": "Create device",
+            "description": "Create a new device in the current workspace.",
+            "visibility": ["capability", "palette"],
+            "group": "Devices",
+            "order": 120,
+        },
+        {
+            "id": f"{artifact_slug}-devices-by-status",
+            "name": "Devices by Status",
+            "prompt": "Show devices by status",
+            "description": "Display a status rollup chart for devices in the current workspace.",
+            "visibility": ["capability", "landing", "palette"],
+            "group": "Reports",
+            "order": 130,
+        },
+    ]
+    if "interfaces" in entities:
+        suggestions.append(
+            {
+                "id": f"{artifact_slug}-show-interfaces",
+                "name": "Show Interfaces",
+                "prompt": "Show interfaces",
+                "description": "List interfaces in the current workspace.",
+                "visibility": ["capability", "palette"],
+                "group": "Interfaces",
+                "order": 140,
+            }
+        )
+    if "interfaces_by_status" in reports:
+        suggestions.append(
+            {
+                "id": f"{artifact_slug}-interfaces-by-status",
+                "name": "Interfaces by Status",
+                "prompt": "Show interfaces by status",
+                "description": "Display a status rollup chart for interfaces in the current workspace.",
+                "visibility": ["capability", "landing", "palette"],
+                "group": "Reports",
+                "order": 150,
+            }
+        )
     return {
         "artifact": {
             "id": artifact_slug,
@@ -329,44 +394,7 @@ def _build_generated_artifact_manifest(*, app_spec: dict[str, Any], runtime_conf
             "tags": ["generated", "application", app_slug],
             "order": 120,
         },
-        "suggestions": [
-            {
-                "id": f"{artifact_slug}-show-devices",
-                "name": "Show Devices",
-                "prompt": "Show devices",
-                "description": "List devices in the current workspace.",
-                "visibility": ["capability", "landing", "palette"],
-                "group": "Devices",
-                "order": 100,
-            },
-            {
-                "id": f"{artifact_slug}-show-locations",
-                "name": "Show Locations",
-                "prompt": "Show locations",
-                "description": "List locations in the current workspace.",
-                "visibility": ["capability", "palette"],
-                "group": "Locations",
-                "order": 110,
-            },
-            {
-                "id": f"{artifact_slug}-create-device",
-                "name": "Create Device",
-                "prompt": "Create device",
-                "description": "Create a new device in the current workspace.",
-                "visibility": ["capability", "palette"],
-                "group": "Devices",
-                "order": 120,
-            },
-            {
-                "id": f"{artifact_slug}-devices-by-status",
-                "name": "Devices by Status",
-                "prompt": "Show devices by status",
-                "description": "Display a status rollup chart for devices in the current workspace.",
-                "visibility": ["capability", "landing", "palette"],
-                "group": "Reports",
-                "order": 130,
-            },
-        ],
+        "suggestions": suggestions,
         "surfaces": {
             "manage": [{"label": "Workbench", "path": "/app/workbench", "order": 100}],
             "docs": [{"label": "Workbench", "path": "/app/workbench", "order": 1000}],
@@ -610,6 +638,64 @@ def _register_sibling_runtime_target(
     return register_body if isinstance(register_body, dict) else {}
 
 
+def _find_revision_sibling_target(
+    db: Session,
+    *,
+    root_workspace_id: uuid.UUID,
+    revision_anchor: dict[str, Any],
+    app_slug: str,
+) -> Optional[dict[str, Any]]:
+    anchor_workspace_id = str(revision_anchor.get("workspace_id") or "").strip()
+    anchor_instance_id = str(revision_anchor.get("workspace_app_instance_id") or "").strip()
+    anchor_artifact_slug = str(revision_anchor.get("artifact_slug") or "").strip()
+    if not anchor_workspace_id or not anchor_artifact_slug:
+        return None
+
+    candidates = (
+        db.query(Job)
+        .filter(
+            Job.workspace_id == root_workspace_id,
+            Job.type == "provision_sibling_xyn",
+            Job.status == JobStatus.SUCCEEDED.value,
+        )
+        .order_by(Job.updated_at.desc())
+        .all()
+    )
+    for candidate in candidates:
+        output = candidate.output_json if isinstance(candidate.output_json, dict) else {}
+        installed_artifact = output.get("installed_artifact") if isinstance(output.get("installed_artifact"), dict) else {}
+        runtime_registration = output.get("runtime_registration") if isinstance(output.get("runtime_registration"), dict) else {}
+        runtime_instance = runtime_registration.get("instance") if isinstance(runtime_registration.get("instance"), dict) else {}
+        runtime_target = output.get("runtime_target") if isinstance(output.get("runtime_target"), dict) else {}
+        sibling_compose_project = str(output.get("compose_project") or "").strip()
+        sibling_ui_url = str(output.get("ui_url") or "").strip()
+        sibling_api_url = str(output.get("api_url") or "").strip()
+        installed_workspace_id = str(installed_artifact.get("workspace_id") or "").strip()
+        installed_artifact_slug = str(installed_artifact.get("artifact_slug") or "").strip()
+        runtime_app_slug = str(runtime_target.get("app_slug") or "").strip()
+        runtime_instance_id = str(runtime_instance.get("id") or "").strip()
+        if installed_workspace_id != anchor_workspace_id:
+            continue
+        if installed_artifact_slug != anchor_artifact_slug:
+            continue
+        if runtime_app_slug and runtime_app_slug != app_slug:
+            continue
+        if anchor_instance_id and runtime_instance_id and runtime_instance_id != anchor_instance_id:
+            continue
+        if not sibling_compose_project or not sibling_ui_url or not sibling_api_url:
+            continue
+        return {
+            "deployment_id": str(output.get("deployment_id") or ""),
+            "compose_project": sibling_compose_project,
+            "ui_url": sibling_ui_url,
+            "api_url": sibling_api_url,
+            "installed_artifact": installed_artifact,
+            "runtime_target": runtime_target,
+            "runtime_registration": runtime_registration,
+        }
+    return None
+
+
 def _execute_sibling_palette_prompt(
     *,
     sibling_api_container: str,
@@ -686,19 +772,83 @@ def _persist_json_artifact(
     return str(row.id)
 
 
-def _build_app_spec(*, workspace_id: uuid.UUID, title: str, raw_prompt: str) -> dict[str, Any]:
+def _normalize_unique_strings(values: list[Any] | tuple[Any, ...] | set[Any] | None) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values or []:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        key = text.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(text)
+    return result
+
+
+def _infer_entities_from_prompt(raw_prompt: str) -> list[str]:
+    prompt = str(raw_prompt or "").lower()
+    entity_map = {
+        "devices": ("device", "devices"),
+        "locations": ("location", "locations", "site", "sites", "rack", "racks", "room", "rooms"),
+        "interfaces": ("interface", "interfaces"),
+        "ip_addresses": ("ip address", "ip addresses", "ip_address", "ip_addresses"),
+        "vlans": ("vlan", "vlans"),
+    }
+    entities: list[str] = []
+    for slug, tokens in entity_map.items():
+        if any(token in prompt for token in tokens):
+            entities.append(slug)
+    if "devices" not in entities and any(token in prompt for token in ("inventory", "network")):
+        entities.append("devices")
+    return _normalize_unique_strings(entities)
+
+
+def _infer_requested_visuals_from_prompt(raw_prompt: str) -> list[str]:
+    prompt = str(raw_prompt or "").lower()
+    visuals: list[str] = []
+    if any(token in prompt for token in ("chart", "report")) and "devices" in prompt and "status" in prompt:
+        visuals.append("devices_by_status_chart")
+    if any(token in prompt for token in ("chart", "report")) and "interfaces" in prompt and "status" in prompt:
+        visuals.append("interfaces_by_status_chart")
+    return _normalize_unique_strings(visuals)
+
+
+def _infer_entities_from_app_spec(app_spec: dict[str, Any]) -> list[str]:
+    entities = _normalize_unique_strings(app_spec.get("entities") if isinstance(app_spec.get("entities"), list) else [])
+    if entities:
+        return entities
+    inferred: list[str] = []
+    service_names = {
+        str(service.get("name") or "").strip().lower()
+        for service in app_spec.get("services", [])
+        if isinstance(service, dict)
+    }
+    if "net-inventory-api" in service_names:
+        inferred.extend(["devices", "locations"])
+    reports = _normalize_unique_strings(app_spec.get("reports") if isinstance(app_spec.get("reports"), list) else [])
+    if any(report == "interfaces_by_status" for report in reports):
+        inferred.append("interfaces")
+    source_prompt = str(app_spec.get("source_prompt") or "")
+    inferred.extend(_infer_entities_from_prompt(source_prompt))
+    return _normalize_unique_strings(inferred)
+
+
+def _build_app_spec(
+    *,
+    workspace_id: uuid.UUID,
+    title: str,
+    raw_prompt: str,
+    initial_intent: Optional[dict[str, Any]] = None,
+    current_app_spec: Optional[dict[str, Any]] = None,
+    current_app_summary: Optional[dict[str, Any]] = None,
+    revision_anchor: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
     prompt = raw_prompt.lower()
     mentions_inventory = any(token in prompt for token in ("inventory", "device", "devices", "network"))
-    app_slug = "net-inventory" if mentions_inventory else _safe_slug(title, default="net-inventory")
-    requires_primitives: list[str] = []
-    if any(token in prompt for token in ("location", "address", "site", "rack", "closet", "building", "room")):
-        requires_primitives.append("location")
-
-    spec = {
+    base_spec = copy.deepcopy(current_app_spec) if isinstance(current_app_spec, dict) else {
         "schema_version": "xyn.appspec.v0",
-        "app_slug": app_slug,
-        "title": title or "Network Inventory",
-        "workspace_id": str(workspace_id),
         "services": [
             {
                 "name": "net-inventory-api",
@@ -725,10 +875,94 @@ def _build_app_spec(*, workspace_id: uuid.UUID, title: str, raw_prompt: str) -> 
         "ingress": {"enabled": False},
         "data": {"postgres": {"required": True, "service": "net-inventory-db"}},
         "reports": ["devices_by_status"],
-        "source_prompt": raw_prompt,
     }
+
+    app_slug = str(base_spec.get("app_slug") or "").strip() or (
+        "net-inventory" if mentions_inventory else _safe_slug(title, default="net-inventory")
+    )
+    app_title = str(title or base_spec.get("title") or "Network Inventory").strip() or "Network Inventory"
+    requested_entities = _normalize_unique_strings(
+        (
+            (initial_intent or {}).get("requested_entities")
+            if isinstance((initial_intent or {}).get("requested_entities"), list)
+            else []
+        )
+    )
+    requested_visuals = _normalize_unique_strings(
+        (
+            (initial_intent or {}).get("requested_visuals")
+            if isinstance((initial_intent or {}).get("requested_visuals"), list)
+            else []
+        )
+    )
+    inferred_entities = _infer_entities_from_prompt(raw_prompt)
+    inferred_visuals = _infer_requested_visuals_from_prompt(raw_prompt)
+    existing_entities = _infer_entities_from_app_spec(base_spec)
+    summary_entities = _normalize_unique_strings(
+        (
+            (current_app_summary or {}).get("entities")
+            if isinstance((current_app_summary or {}).get("entities"), list)
+            else []
+        )
+    )
+    entities = _normalize_unique_strings(existing_entities + summary_entities + requested_entities + inferred_entities)
+    if not entities:
+        entities = ["devices", "locations"]
+
+    existing_reports = _normalize_unique_strings(
+        base_spec.get("reports") if isinstance(base_spec.get("reports"), list) else []
+    )
+    reports = existing_reports[:]
+    visuals = _normalize_unique_strings(
+        (
+            _normalize_unique_strings(base_spec.get("requested_visuals") if isinstance(base_spec.get("requested_visuals"), list) else [])
+            + requested_visuals
+            + inferred_visuals
+        )
+    )
+    if "devices" in entities and "devices_by_status_chart" not in visuals and "devices_by_status" not in reports:
+        visuals.append("devices_by_status_chart")
+    visual_report_map = {
+        "devices_by_status_chart": "devices_by_status",
+        "interfaces_by_status_chart": "interfaces_by_status",
+    }
+    for visual in visuals:
+        report = visual_report_map.get(visual)
+        if report and report not in reports:
+            reports.append(report)
+
+    requires_primitives = _normalize_unique_strings(
+        base_spec.get("requires_primitives") if isinstance(base_spec.get("requires_primitives"), list) else []
+    )
+    if any(token in prompt for token in ("location", "locations", "address", "site", "rack", "closet", "building", "room")):
+        requires_primitives.append("location")
+    if "locations" in entities and "location" not in requires_primitives:
+        requires_primitives.append("location")
+
+    phase_1_scope = _normalize_unique_strings(
+        (
+            (initial_intent or {}).get("phase_1_scope")
+            if isinstance((initial_intent or {}).get("phase_1_scope"), list)
+            else []
+        )
+    )
+    if not phase_1_scope:
+        phase_1_scope = entities[:]
+
+    spec = copy.deepcopy(base_spec)
+    spec["schema_version"] = "xyn.appspec.v0"
+    spec["app_slug"] = app_slug
+    spec["title"] = app_title
+    spec["workspace_id"] = str(workspace_id)
+    spec["source_prompt"] = raw_prompt
+    spec["entities"] = entities
+    spec["phase_1_scope"] = phase_1_scope
+    spec["requested_visuals"] = visuals
+    spec["reports"] = reports
     if requires_primitives:
-        spec["requires_primitives"] = requires_primitives
+        spec["requires_primitives"] = _normalize_unique_strings(requires_primitives)
+    if revision_anchor:
+        spec["revision_anchor"] = copy.deepcopy(revision_anchor)
     return spec
 
 
@@ -891,6 +1125,10 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
     title = str(payload.get("title") or "Network Inventory").strip() or "Network Inventory"
     content = payload.get("content_json") if isinstance(payload.get("content_json"), dict) else {}
     raw_prompt = str(content.get("raw_prompt") or payload.get("raw_prompt") or title).strip()
+    initial_intent = content.get("initial_intent") if isinstance(content.get("initial_intent"), dict) else {}
+    revision_anchor = content.get("revision_anchor") if isinstance(content.get("revision_anchor"), dict) else None
+    current_app_summary = content.get("current_app_summary") if isinstance(content.get("current_app_summary"), dict) else None
+    current_app_spec = content.get("current_app_spec") if isinstance(content.get("current_app_spec"), dict) else None
     primitive_catalog = get_primitive_catalog()
     _append_job_log(logs, f"Loaded primitive catalog ({len(primitive_catalog)} entries)")
     _append_job_log(logs, f"Generating AppSpec from prompt: {raw_prompt}")
@@ -919,7 +1157,15 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
     # AppSpec remains primarily a build intermediate. Future work may
     # consolidate AppSpec into an ArtifactSpec so prompts generate artifacts
     # directly while preserving the current packaging and install semantics.
-    app_spec = _build_app_spec(workspace_id=job.workspace_id, title=title, raw_prompt=raw_prompt)
+    app_spec = _build_app_spec(
+        workspace_id=job.workspace_id,
+        title=title,
+        raw_prompt=raw_prompt,
+        initial_intent=initial_intent,
+        current_app_spec=current_app_spec,
+        current_app_summary=current_app_summary,
+        revision_anchor=revision_anchor,
+    )
     try:
         validate(instance=app_spec, schema=_load_appspec_schema())
     except ValidationError as exc:
@@ -945,6 +1191,7 @@ def _handle_generate_app_spec(db: Session, job: Job, logs: list[str]) -> tuple[d
         "app_slug": app_spec["app_slug"],
         "artifact_slug": _generated_artifact_slug(str(app_spec.get("app_slug") or "generated-app")),
         "artifact_version": GENERATED_ARTIFACT_VERSION,
+        "app_spec_artifact_id": artifact_id,
         "images": selected_images,
         "ports": selected_ports,
         "services": app_spec.get("services") if isinstance(app_spec.get("services"), list) else [],
@@ -1083,25 +1330,48 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
     payload = job.input_json or {}
     execution_note_artifact_id = str(payload.get("execution_note_artifact_id") or "").strip()
     deployment = payload.get("deployment") if isinstance(payload.get("deployment"), dict) else {}
+    app_spec = payload.get("app_spec") if isinstance(payload.get("app_spec"), dict) else {}
+    app_slug = _safe_slug(str(app_spec.get("app_slug") or "net-inventory"), default="net-inventory")
+    revision_anchor = app_spec.get("revision_anchor") if isinstance(app_spec.get("revision_anchor"), dict) else {}
     workspace = db.query(Workspace).filter(Workspace.id == job.workspace_id).first()
     workspace_slug = str(getattr(workspace, "slug", "default") or "default")
-    sibling_name = _safe_slug(f"smoke-{deployment.get('app_slug') or 'app'}-{str(job.id)[:6]}", default="smoke-app")
-    ui_host = f"{sibling_name}.localhost"
-    api_host = f"api.{sibling_name}.localhost"
-    _append_job_log(logs, f"Provisioning sibling Xyn: name={sibling_name} ui_host={ui_host} api_host={api_host}")
-    try:
-        sibling = provision_local_instance(
-            ProvisionLocalRequest(
-                name=sibling_name,
-                force=True,
-                workspace_slug=workspace_slug,
-                ui_host=ui_host,
-                api_host=api_host,
-            )
+    sibling: dict[str, Any]
+    reused_sibling = _find_revision_sibling_target(
+        db,
+        root_workspace_id=job.workspace_id,
+        revision_anchor=revision_anchor,
+        app_slug=app_slug,
+    )
+    if reused_sibling:
+        sibling = {
+            "deployment_id": reused_sibling.get("deployment_id"),
+            "compose_project": reused_sibling.get("compose_project"),
+            "ui_url": reused_sibling.get("ui_url"),
+            "api_url": reused_sibling.get("api_url"),
+        }
+        _append_job_log(
+            logs,
+            "Reusing anchored sibling Xyn deployment "
+            f"deployment_id={sibling.get('deployment_id')} ui_url={sibling.get('ui_url')}",
         )
-    except HTTPException as exc:
-        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
-        raise RuntimeError(f"Sibling provisioning failed: {detail}") from exc
+    else:
+        sibling_name = _safe_slug(f"smoke-{deployment.get('app_slug') or 'app'}-{str(job.id)[:6]}", default="smoke-app")
+        ui_host = f"{sibling_name}.localhost"
+        api_host = f"api.{sibling_name}.localhost"
+        _append_job_log(logs, f"Provisioning sibling Xyn: name={sibling_name} ui_host={ui_host} api_host={api_host}")
+        try:
+            sibling = provision_local_instance(
+                ProvisionLocalRequest(
+                    name=sibling_name,
+                    force=True,
+                    workspace_slug=workspace_slug,
+                    ui_host=ui_host,
+                    api_host=api_host,
+                )
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+            raise RuntimeError(f"Sibling provisioning failed: {detail}") from exc
 
     sibling_output = {
         "deployment_id": sibling.get("deployment_id"),
@@ -1155,12 +1425,14 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
         f"workspace={installed_artifact.get('workspace_slug')} artifact={installed_artifact.get('artifact_slug')} "
         "source=generated",
     )
-    app_spec = payload.get("app_spec") if isinstance(payload.get("app_spec"), dict) else {}
-    app_slug = _safe_slug(str(app_spec.get("app_slug") or "net-inventory"), default="net-inventory")
     if not sibling_network or not _docker_network_exists(sibling_network):
         raise RuntimeError(f"Sibling network not available for runtime target registration: {sibling_network or '<empty>'}")
     sibling_stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    sibling_runtime_project = _safe_slug(f"xyn-sibling-{app_slug}-{str(job.id)[:6]}", default="xyn-sibling-app")
+    reused_runtime_target = reused_sibling.get("runtime_target") if isinstance(reused_sibling, dict) and isinstance(reused_sibling.get("runtime_target"), dict) else {}
+    sibling_runtime_project = str(reused_runtime_target.get("compose_project") or "").strip() or _safe_slug(
+        f"xyn-sibling-{app_slug}-{str(job.id)[:6]}",
+        default="xyn-sibling-app",
+    )
     sibling_runtime_dir = _deployments_root() / app_slug / f"sibling-{sibling_stamp}-{str(job.id)[:6]}"
     sibling_runtime_dir.mkdir(parents=True, exist_ok=True)
     sibling_runtime = _deploy_generated_runtime(
@@ -1168,8 +1440,8 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
         deployment_dir=sibling_runtime_dir,
         compose_project=sibling_runtime_project,
         logs=logs,
-        external_network_name=sibling_network,
-        external_network_alias=f"{sibling_runtime_project}-api",
+        external_network_name=str(reused_runtime_target.get("external_network") or sibling_network),
+        external_network_alias=str(reused_runtime_target.get("network_alias") or f"{sibling_runtime_project}-api"),
     )
     sibling_runtime.update(
         {
@@ -1227,6 +1499,7 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
             "input_json": {
                 "deployment": deployment,
                 "sibling": sibling_output,
+                "app_spec": app_spec,
                 "generated_artifact": generated_artifact,
                 "execution_note_artifact_id": execution_note_artifact_id,
                 "source_job_id": str(job.id),
@@ -1241,6 +1514,7 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
     execution_note_artifact_id = str(payload.get("execution_note_artifact_id") or "").strip()
     deployment = payload.get("deployment") if isinstance(payload.get("deployment"), dict) else {}
     sibling = payload.get("sibling") if isinstance(payload.get("sibling"), dict) else {}
+    app_spec = payload.get("app_spec") if isinstance(payload.get("app_spec"), dict) else {}
     generated_artifact = payload.get("generated_artifact") if isinstance(payload.get("generated_artifact"), dict) else {}
     app_container_name = str(deployment.get("app_container_name") or "").strip()
     if not app_container_name:
@@ -1452,6 +1726,55 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
     if sibling_create_code not in {200, 201}:
         raise RuntimeError(f"Sibling POST /devices failed ({sibling_create_code}): {sibling_create_text}")
 
+    sibling_interface_code = 0
+    sibling_interface_body: dict[str, Any] = {}
+    sibling_interface_report_code = 0
+    sibling_interface_report_body: dict[str, Any] = {}
+    app_entities = _infer_entities_from_app_spec(app_spec)
+    if "interfaces" in app_entities:
+        sibling_device_id = str(sibling_create_body.get("id") or "").strip() if isinstance(sibling_create_body, dict) else ""
+        if not sibling_device_id:
+            raise RuntimeError("Sibling POST /devices did not return a device id required for interface seeding")
+        sibling_interface_code, sibling_interface_body, sibling_interface_text = _container_http_json(
+            sibling_runtime_container,
+            "POST",
+            "/interfaces",
+            port=8080,
+            payload={
+                "workspace_id": sibling_workspace_id,
+                "device_id": sibling_device_id,
+                "name": "eth0",
+                "status": "up",
+            },
+        )
+        if sibling_interface_code not in {200, 201}:
+            raise RuntimeError(f"Sibling POST /interfaces failed ({sibling_interface_code}): {sibling_interface_text}")
+        sibling_interface_list_code, sibling_interface_list_body, sibling_interface_list_text = _container_http_json(
+            sibling_runtime_container,
+            "GET",
+            f"/interfaces?workspace_id={sibling_workspace_id}",
+            port=8080,
+        )
+        if sibling_interface_list_code != 200:
+            raise RuntimeError(f"Sibling GET /interfaces failed ({sibling_interface_list_code}): {sibling_interface_list_text}")
+        sibling_interface_items = sibling_interface_list_body if isinstance(sibling_interface_list_body, list) else (
+            sibling_interface_list_body.get("items")
+            if isinstance(sibling_interface_list_body, dict) and isinstance(sibling_interface_list_body.get("items"), list)
+            else []
+        )
+        if not any(str(item.get("name") or "").strip() == "eth0" for item in sibling_interface_items if isinstance(item, dict)):
+            raise RuntimeError("Sibling GET /interfaces did not include the seeded interface")
+        sibling_interface_report_code, sibling_interface_report_body, sibling_interface_report_text = _container_http_json(
+            sibling_runtime_container,
+            "GET",
+            f"/reports/interfaces-by-status?workspace_id={sibling_workspace_id}",
+            port=8080,
+        )
+        if sibling_interface_report_code != 200:
+            raise RuntimeError(
+                f"Sibling GET /reports/interfaces-by-status failed ({sibling_interface_report_code}): {sibling_interface_report_text}"
+            )
+
     palette_status, palette_result, palette_text = _execute_sibling_palette_prompt(
         sibling_api_container=sibling_api_container,
         workspace_slug=sibling_workspace_slug,
@@ -1469,6 +1792,34 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
             f"Sibling palette targeted unexpected runtime base URL: {palette_meta.get('base_url')} != {sibling_runtime_base_url}"
         )
     _append_job_log(logs, f"Palette check returned {len(palette_result.get('rows') or [])} rows")
+    sibling_interfaces_palette: dict[str, Any] = {}
+    sibling_interfaces_chart: dict[str, Any] = {}
+    if "interfaces" in app_entities:
+        palette_interfaces_status, palette_interfaces_result, palette_interfaces_text = _execute_sibling_palette_prompt(
+            sibling_api_container=sibling_api_container,
+            workspace_slug=sibling_workspace_slug,
+            prompt="show interfaces",
+        )
+        if palette_interfaces_status != 200:
+            raise RuntimeError(f"Sibling palette interfaces request failed ({palette_interfaces_status}): {palette_interfaces_text}")
+        if palette_interfaces_result.get("kind") != "table":
+            raise RuntimeError(f"Palette did not return interface table: {palette_interfaces_result}")
+        if not isinstance(palette_interfaces_result.get("rows"), list) or not palette_interfaces_result.get("rows"):
+            raise RuntimeError("Palette show interfaces returned no rows")
+        sibling_interfaces_palette = palette_interfaces_result
+
+        palette_interfaces_chart_status, palette_interfaces_chart_result, palette_interfaces_chart_text = _execute_sibling_palette_prompt(
+            sibling_api_container=sibling_api_container,
+            workspace_slug=sibling_workspace_slug,
+            prompt="show interfaces by status",
+        )
+        if palette_interfaces_chart_status != 200:
+            raise RuntimeError(
+                f"Sibling palette interface chart request failed ({palette_interfaces_chart_status}): {palette_interfaces_chart_text}"
+            )
+        if palette_interfaces_chart_result.get("kind") != "bar_chart":
+            raise RuntimeError(f"Palette did not return interface chart: {palette_interfaces_chart_result}")
+        sibling_interfaces_chart = palette_interfaces_chart_result
 
     stopped_root_runtime = {"status": "skipped"}
     restarted_root_runtime = {"status": "skipped"}
@@ -1520,6 +1871,16 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "Sibling runtime location/device CRUD smoke checks succeeded.",
                 f"Palette returned {len(palette_result.get('rows') or [])} rows for show devices.",
                 (
+                    f"Palette returned {len(sibling_interfaces_palette.get('rows') or [])} rows for show interfaces."
+                    if sibling_interfaces_palette
+                    else "Interface palette validation not required for this AppSpec."
+                ),
+                (
+                    f"Palette returned {len(sibling_interfaces_chart.get('values') or [])} buckets for show interfaces by status."
+                    if sibling_interfaces_chart
+                    else "Interface chart validation not required for this AppSpec."
+                ),
+                (
                     f"Sibling palette still returned {len(palette_after_root_stop.get('rows') or [])} rows after root runtime stop."
                     if palette_after_root_stop
                     else "Sibling palette was not revalidated after root runtime stop."
@@ -1544,6 +1905,16 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "health": {"code": sibling_runtime_health_code, "body": sibling_runtime_health_body or sibling_runtime_health_text},
                 "create_location": {"code": sibling_location_code, "body": sibling_location_body or sibling_location_text},
                 "create_device": {"code": sibling_create_code, "body": sibling_create_body or sibling_create_text},
+                "create_interface": (
+                    {"code": sibling_interface_code, "body": sibling_interface_body}
+                    if sibling_interface_code in {200, 201}
+                    else None
+                ),
+                "report_interfaces_by_status": (
+                    {"code": sibling_interface_report_code, "body": sibling_interface_report_body}
+                    if sibling_interface_report_code == 200
+                    else None
+                ),
             },
             "sibling_xyn": sibling,
             "generated_artifact": {
@@ -1552,6 +1923,8 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "installed_version": generated_artifact_version,
             },
             "palette": palette_result,
+            "palette_interfaces": sibling_interfaces_palette,
+            "palette_interfaces_by_status": sibling_interfaces_chart,
             "palette_after_root_runtime_stop": palette_after_root_stop,
             "root_runtime_stop": stopped_root_runtime,
             "root_runtime_restart": restarted_root_runtime,

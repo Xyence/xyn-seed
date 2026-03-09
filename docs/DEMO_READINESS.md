@@ -66,6 +66,13 @@ Impact on Demo: Makes it harder to explain what the system is doing during the l
 Current Status: partially addressed  
 Next Action: tighten the build-status presentation on the draft tracking surface and ensure clear success/failure signals. Notifications already expose app-build completion/failure, and Draft Detail now exposes in-shell capability and generated-artifact paths, but the overall story still depends on several separate surfaces.
 
+DEMO-06  
+Title: Generated-app evolution anchor stops at build identity  
+Description: Follow-up prompts from a sibling instance now resolve against the installed generated artifact, reuse the anchored sibling workspace/runtime instead of creating a second sibling environment, and materialize validated evolved features such as interfaces and interfaces-by-status reporting into the runtime and palette surface.  
+Impact on Demo: If this regresses, a live "evolve this app" story will either duplicate the application or stop at updated AppSpec state without visible runtime changes.  
+Current Status: addressed, monitor for regression  
+Next Action: keep validating that follow-up prompts evolve the existing sibling/runtime in place and that newly requested entities/reports remain visible through the sibling runtime and palette path.
+
 # Active Tasks
 
 TASK-01  
@@ -87,7 +94,7 @@ Task Name: Bridge generated app into sibling Xyn install story
 Why It Matters for Demo: The sibling instance must demonstrate artifact-aware installation rather than disconnected provisioning.  
 Owner: Codex  
 Status: in-progress  
-Notes: Keep scope minimal; do not overreach into the full publish/import system unless required. Fresh validation on 2026-03-08 confirmed that the generated package `app.net-inventory@0.0.1-dev` is imported into the root Django registry, re-imported into the sibling Django registry, installed in the sibling workspace, and now surfaces capability-native metadata from the generated package itself. Observed sibling installed artifact metadata for `app.net-inventory` includes `capability.visibility=capabilities`, four palette suggestions (`show devices`, `show locations`, `create device`, `show devices by status`), and workbench manage/docs surfaces. Sibling command execution still works after the root-local generated runtime containers are stopped, using sibling-owned runtime base URL `http://xyn-sibling-net-inventory-1953eb-api:8080`. The seeded `net-inventory` artifact no longer appears in normal catalog or install flows.
+Notes: Keep scope minimal; do not overreach into the full publish/import system unless required. Fresh validation on 2026-03-08 confirmed that the generated package `app.net-inventory@0.0.1-dev` is imported into the root Django registry, re-imported into the sibling Django registry, installed in the sibling workspace, and now surfaces capability-native metadata from the generated package itself. Observed sibling installed artifact metadata for `app.net-inventory` includes `capability.visibility=capabilities`, six palette suggestions (`show devices`, `show locations`, `create device`, `show devices by status`, `show interfaces`, `show interfaces by status`), and workbench manage surfaces. Sibling command execution still works after the root-local generated runtime containers are stopped, using sibling-owned runtime base URL `http://xyn-sibling-net-inventory-9089f5-api:8080`. Follow-up evolution prompts now anchor to the installed generated artifact, update the anchored sibling workspace/runtime in place instead of provisioning a second sibling environment, and materialize revised features such as `interfaces` and `interfaces by status` into sibling runtime commands and reporting.
 
 TASK-04  
 Task Name: Stabilize prompt-driven build tracking UX  

@@ -13,10 +13,10 @@ Planned Resolution: Replace the synced manifest bridge with published/synced con
 
 DEBT-02  
 Title: Generated artifact lifecycle is still partial  
-Description: Sibling Xyn instances now import and install a generated artifact (`app.net-inventory`) before runtime registration, and the generated artifact carries the capability metadata, suggestions, and surfaces needed for sibling UI/capability behavior. The bridge artifact has been retired from normal install/catalog flows, but generated artifact promotion/versioning is still ad hoc and not yet a full publish/promote/install lifecycle.  
+Description: Sibling Xyn instances now import and install a generated artifact (`app.net-inventory`) before runtime registration, and the generated artifact carries the capability metadata, suggestions, and surfaces needed for sibling UI/capability behavior. The bridge artifact has been retired from normal install/catalog flows, anchored revision prompts now reuse the existing sibling workspace/runtime instead of provisioning a second sibling environment, and validated revised features such as `interfaces` and `interfaces by status` now materialize into sibling runtime commands and reporting. Generated artifact promotion/versioning is still ad hoc and not yet a full publish/promote/install lifecycle.  
 Why It Exists: This remains the smallest safe path while the full generated publish/import/install lifecycle is still incomplete.  
-Risk: Generated artifact identity and runtime realization are now aligned for the demo path, but versioning, promotion semantics, and broader lifecycle management remain incomplete.  
-Planned Resolution: Build the next lifecycle step around explicit generated artifact promotion/distribution semantics, then simplify the remaining generated-app import/install code paths.
+Risk: Generated artifact identity, sibling runtime realization, and validated evolution behavior are aligned for the demo path, but versioning, promotion semantics, and broader lifecycle management remain incomplete.  
+Planned Resolution: Build the next lifecycle step around explicit generated artifact promotion/distribution semantics, then simplify the remaining generated-app import/install code paths without regressing the current in-place sibling evolution path.
 
 DEBT-03  
 Title: Clean-baseline migrations are stronger than dirty-dev migration recovery  
