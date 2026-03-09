@@ -72,6 +72,27 @@ def ensure_default_palette_commands(db: Session) -> None:
             },
         ),
         (
+            "create location",
+            {
+                "base_url": "$deployment.app_url",
+                "method": "POST",
+                "path": "/locations",
+                "body_map": {
+                    "workspace_id": "$workspace_id",
+                    "name": "$generated.location_name",
+                    "kind": "site",
+                    "city": "Austin",
+                    "region": "TX",
+                    "country": "US",
+                },
+                "response_adapter": {
+                    "kind": "table",
+                    "columns": ["id", "name", "kind", "city", "region", "country", "workspace_id"],
+                    "text_template": "Created {{count}} location",
+                },
+            },
+        ),
+        (
             "show devices by status",
             {
                 "base_url": "$deployment.app_url",
@@ -156,6 +177,10 @@ def resolve_palette_command(
     key = normalize_command_key(prompt)
     if not key:
         return None
+    if key.startswith("create location"):
+        key = "create location"
+    elif key.startswith("create device"):
+        key = "create device"
 
     workspace_match = (
         db.query(PaletteCommand)

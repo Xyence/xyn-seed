@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import uuid as uuidlib
 import uuid
+import re
 from typing import Any
 from urllib.parse import urlencode
 
@@ -53,7 +54,92 @@ def _resolve_value(
             return str((deployment or {}).get("app_url") or "")
         if token == "$generated.device_name":
             return f"demo-device-{uuidlib.uuid4().hex[:8]}"
+        if token == "$generated.location_name":
+            return f"demo-location-{uuidlib.uuid4().hex[:8]}"
     return value
+
+
+def _normalize_prompt_key(prompt: str) -> str:
+    return " ".join(str(prompt or "").strip().lower().split())
+
+
+def _parse_location_create_prompt(prompt: str) -> tuple[dict[str, Any], list[str]]:
+    normalized = str(prompt or "").strip()
+    remainder = normalized[len("create location"):].strip() if normalized.lower().startswith("create location") else normalized
+    if remainder.lower().startswith("named "):
+        remainder = remainder[6:].strip()
+    if not remainder:
+        return {}, ["name", "city"]
+
+    name_part = remainder
+    location_part = ""
+    split_match = re.split(r"\s+in\s+", remainder, maxsplit=1, flags=re.IGNORECASE)
+    if len(split_match) == 2:
+        name_part, location_part = split_match[0].strip(), split_match[1].strip()
+
+    if not name_part:
+        return {}, ["name", "city"] if not location_part else ["name"]
+
+    payload: dict[str, Any] = {"name": name_part, "kind": "site"}
+    if location_part:
+        tokens = [token.strip(", ") for token in location_part.split() if token.strip(", ")]
+        if len(tokens) >= 3 and len(tokens[-1]) >= 2 and len(tokens[-2]) <= 3:
+            payload["country"] = tokens[-1]
+            payload["region"] = tokens[-2]
+            payload["city"] = " ".join(tokens[:-2]).strip()
+        else:
+            payload["city"] = location_part.strip()
+    missing = []
+    if not str(payload.get("name") or "").strip():
+        missing.append("name")
+    if not str(payload.get("city") or "").strip():
+        missing.append("city")
+    return payload, missing
+
+
+def _parse_device_create_prompt(prompt: str) -> tuple[dict[str, Any], list[str]]:
+    normalized = str(prompt or "").strip()
+    remainder = normalized[len("create device"):].strip() if normalized.lower().startswith("create device") else normalized
+    if remainder.lower().startswith("named "):
+        remainder = remainder[6:].strip()
+    if not remainder:
+        return {}, ["name"]
+    payload = {
+        "name": remainder,
+        "kind": "router",
+        "status": "online",
+    }
+    missing = [] if str(payload.get("name") or "").strip() else ["name"]
+    return payload, missing
+
+
+def _completion_response(
+    *,
+    workspace_id: uuid.UUID,
+    command_id: uuid.UUID,
+    command_key: str,
+    missing_fields: list[str],
+    example: str,
+    context_pack_artifact_ids: list[str],
+    context_pack_slugs: list[str],
+    context_warnings: list[str],
+) -> dict[str, Any]:
+    missing_text = ", ".join(missing_fields)
+    return {
+        "kind": "text",
+        "columns": [],
+        "rows": [],
+        "text": f"To {command_key}, provide: {missing_text}. Example: {example}",
+        "meta": {
+            "workspace_id": str(workspace_id),
+            "command_id": str(command_id),
+            "command_key": command_key,
+            "missing_fields": missing_fields,
+            "context_pack_artifact_ids": context_pack_artifact_ids,
+            "context_pack_slugs": context_pack_slugs,
+            "context_warnings": context_warnings,
+        },
+    }
 
 
 def execute_palette_prompt(
@@ -128,6 +214,37 @@ def execute_palette_prompt(
         key: _resolve_value(value, workspace_id=workspace.id, workspace_slug=workspace.slug, deployment=deployment)
         for key, value in body_map.items()
     }
+    normalized_prompt = _normalize_prompt_key(prompt)
+    if command.command_key == "create location" and normalized_prompt.startswith("create location"):
+        parsed_payload, missing_fields = _parse_location_create_prompt(prompt)
+        if missing_fields:
+            return _completion_response(
+                workspace_id=workspace.id,
+                command_id=command.id,
+                command_key=command.command_key,
+                missing_fields=missing_fields,
+                example="create location named office in St. Louis MO USA",
+                context_pack_artifact_ids=[str(pack.id) for pack in context_packs],
+                context_pack_slugs=[str((pack.extra_metadata or {}).get("pack_slug") or pack.name) for pack in context_packs],
+                context_warnings=context_warnings,
+            )
+        resolved_body.update(parsed_payload)
+        resolved_body["workspace_id"] = str(workspace.id)
+    elif command.command_key == "create device" and normalized_prompt.startswith("create device"):
+        parsed_payload, missing_fields = _parse_device_create_prompt(prompt)
+        if missing_fields:
+            return _completion_response(
+                workspace_id=workspace.id,
+                command_id=command.id,
+                command_key=command.command_key,
+                missing_fields=missing_fields,
+                example="create device named edge-router-1",
+                context_pack_artifact_ids=[str(pack.id) for pack in context_packs],
+                context_pack_slugs=[str((pack.extra_metadata or {}).get("pack_slug") or pack.name) for pack in context_packs],
+                context_warnings=context_warnings,
+            )
+        resolved_body.update(parsed_payload)
+        resolved_body["workspace_id"] = str(workspace.id)
 
     if deployment is not None and str(base_url).rstrip("/") == str(deployment.get("app_url") or "").rstrip("/"):
         code, body, raw = deployment_request_json(

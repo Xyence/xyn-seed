@@ -344,6 +344,15 @@ def _build_generated_artifact_manifest(*, app_spec: dict[str, Any], runtime_conf
             "order": 120,
         },
         {
+            "id": f"{artifact_slug}-create-location",
+            "name": "Create Location",
+            "prompt": "Create location",
+            "description": "Create a new location in the current workspace.",
+            "visibility": ["capability", "palette"],
+            "group": "Locations",
+            "order": 125,
+        },
+        {
             "id": f"{artifact_slug}-devices-by-status",
             "name": "Devices by Status",
             "prompt": "Show devices by status",
@@ -1792,6 +1801,46 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
             f"Sibling palette targeted unexpected runtime base URL: {palette_meta.get('base_url')} != {sibling_runtime_base_url}"
         )
     _append_job_log(logs, f"Palette check returned {len(palette_result.get('rows') or [])} rows")
+    palette_create_location_status, palette_create_location_result, palette_create_location_text = _execute_sibling_palette_prompt(
+        sibling_api_container=sibling_api_container,
+        workspace_slug=sibling_workspace_slug,
+        prompt="create location",
+    )
+    if palette_create_location_status != 200:
+        raise RuntimeError(
+            f"Sibling palette create location request failed ({palette_create_location_status}): {palette_create_location_text}"
+        )
+    if palette_create_location_result.get("kind") != "text":
+        raise RuntimeError(f"Palette did not return create-location completion prompt: {palette_create_location_result}")
+    missing_fields = palette_create_location_result.get("meta", {}).get("missing_fields")
+    if not isinstance(missing_fields, list) or "name" not in missing_fields or "city" not in missing_fields:
+        raise RuntimeError(f"Palette create location did not report missing required fields: {palette_create_location_result}")
+
+    palette_create_location_filled_status, palette_create_location_filled_result, palette_create_location_filled_text = _execute_sibling_palette_prompt(
+        sibling_api_container=sibling_api_container,
+        workspace_slug=sibling_workspace_slug,
+        prompt="create location named office in St. Louis MO USA",
+    )
+    if palette_create_location_filled_status != 200:
+        raise RuntimeError(
+            f"Sibling palette create location completion failed ({palette_create_location_filled_status}): {palette_create_location_filled_text}"
+        )
+    if palette_create_location_filled_result.get("kind") != "table":
+        raise RuntimeError(f"Palette did not return location creation table: {palette_create_location_filled_result}")
+    if not isinstance(palette_create_location_filled_result.get("rows"), list) or not palette_create_location_filled_result.get("rows"):
+        raise RuntimeError("Palette create location completion returned no rows")
+
+    palette_locations_status, palette_locations_result, palette_locations_text = _execute_sibling_palette_prompt(
+        sibling_api_container=sibling_api_container,
+        workspace_slug=sibling_workspace_slug,
+        prompt="show locations",
+    )
+    if palette_locations_status != 200:
+        raise RuntimeError(f"Sibling palette locations request failed ({palette_locations_status}): {palette_locations_text}")
+    if palette_locations_result.get("kind") != "table":
+        raise RuntimeError(f"Palette did not return locations table: {palette_locations_result}")
+    if not isinstance(palette_locations_result.get("rows"), list) or not palette_locations_result.get("rows"):
+        raise RuntimeError("Palette show locations returned no rows")
     sibling_interfaces_palette: dict[str, Any] = {}
     sibling_interfaces_chart: dict[str, Any] = {}
     if "interfaces" in app_entities:
@@ -1870,6 +1919,9 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "Sibling runtime health endpoint returned 200.",
                 "Sibling runtime location/device CRUD smoke checks succeeded.",
                 f"Palette returned {len(palette_result.get('rows') or [])} rows for show devices.",
+                f"Palette create location requested missing fields: {', '.join(str(field) for field in missing_fields)}.",
+                f"Palette returned {len(palette_create_location_filled_result.get('rows') or [])} rows for completed create location.",
+                f"Palette returned {len(palette_locations_result.get('rows') or [])} rows for show locations.",
                 (
                     f"Palette returned {len(sibling_interfaces_palette.get('rows') or [])} rows for show interfaces."
                     if sibling_interfaces_palette
@@ -1923,6 +1975,8 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
                 "installed_version": generated_artifact_version,
             },
             "palette": palette_result,
+            "palette_create_location": palette_create_location_result,
+            "palette_locations": palette_locations_result,
             "palette_interfaces": sibling_interfaces_palette,
             "palette_interfaces_by_status": sibling_interfaces_chart,
             "palette_after_root_runtime_stop": palette_after_root_stop,
