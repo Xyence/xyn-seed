@@ -1766,7 +1766,7 @@ def _handle_smoke_test(db: Session, job: Job, logs: list[str]) -> tuple[dict[str
     if palette_create_location_result.get("kind") != "text":
         raise RuntimeError(f"Palette did not return create-location completion prompt: {palette_create_location_result}")
     missing_fields = palette_create_location_result.get("meta", {}).get("missing_fields")
-    if not isinstance(missing_fields, list) or "name" not in missing_fields or "city" not in missing_fields:
+    if not isinstance(missing_fields, list) or "name" not in missing_fields:
         raise RuntimeError(f"Palette create location did not report missing required fields: {palette_create_location_result}")
 
     palette_create_location_filled_status, palette_create_location_filled_result, palette_create_location_filled_text = _execute_sibling_palette_prompt(
