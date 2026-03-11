@@ -43,10 +43,10 @@ STEP_TERMINAL_STATUSES = {
     models.StepStatus.FAILED,
 }
 RUN_STATUS_TRANSITIONS = {
-    models.RunStatus.QUEUED: {models.RunStatus.RUNNING, models.RunStatus.CANCELLED},
+    models.RunStatus.QUEUED: {models.RunStatus.RUNNING, models.RunStatus.BLOCKED, models.RunStatus.CANCELLED},
     models.RunStatus.RUNNING: {models.RunStatus.COMPLETED, models.RunStatus.FAILED, models.RunStatus.BLOCKED, models.RunStatus.CANCELLED, models.RunStatus.QUEUED},
     models.RunStatus.FAILED: {models.RunStatus.QUEUED},
-    models.RunStatus.BLOCKED: set(),
+    models.RunStatus.BLOCKED: {models.RunStatus.QUEUED},
     models.RunStatus.COMPLETED: set(),
     models.RunStatus.CANCELLED: set(),
     models.RunStatus.CREATED: {models.RunStatus.RUNNING, models.RunStatus.CANCELLED},
@@ -89,6 +89,22 @@ def _artifact_path(run_id: uuid.UUID, artifact_id: uuid.UUID, artifact_type: str
         return root / file_name
     suffix = "json" if artifact_type in {"report", "summary"} else "txt"
     return root / f"{artifact_id}.{suffix}"
+
+
+def _runtime_controls(run: models.Run) -> Dict[str, Any]:
+    policy = dict(run.execution_policy or {})
+    controls = policy.get("runtime_controls") if isinstance(policy.get("runtime_controls"), dict) else {}
+    return dict(controls or {})
+
+
+def _set_runtime_controls(run: models.Run, controls: Dict[str, Any]) -> None:
+    policy = dict(run.execution_policy or {})
+    policy["runtime_controls"] = dict(controls or {})
+    run.execution_policy = policy
+
+
+def pause_requested(run: models.Run) -> bool:
+    return bool(_runtime_controls(run).get("pause_requested"))
 
 
 def create_runtime_run(db: Session, payload: RunPayloadV1, *, actor: str = "runtime") -> models.Run:
@@ -381,6 +397,78 @@ def complete_run(
     return run
 
 
+def request_pause_run(
+    db: Session,
+    run_id: uuid.UUID,
+    *,
+    actor: str = "conversation",
+) -> models.Run:
+    run = db.query(models.Run).filter(models.Run.id == run_id).one()
+    controls = _runtime_controls(run)
+    controls["pause_requested"] = True
+    controls["pause_requested_by"] = actor
+    controls["pause_requested_at"] = _utcnow().isoformat()
+    _set_runtime_controls(run, controls)
+    if run.status == models.RunStatus.QUEUED:
+        transition_run_status(
+            db,
+            run,
+            models.RunStatus.BLOCKED,
+            summary="Run paused before execution.",
+            escalation_reason="paused_by_user",
+        )
+        publish_runtime_event(
+            db,
+            event_name="run.blocked",
+            run_id=run.id,
+            actor=actor,
+            correlation_id=run.correlation_id,
+            data={"summary": run.summary, "escalation_reason": run.escalation_reason},
+        )
+    else:
+        run.summary = "Pause requested. Run will block at the next safe checkpoint."
+        db.flush()
+    return run
+
+
+def continue_blocked_run(
+    db: Session,
+    run_id: uuid.UUID,
+    *,
+    actor: str = "conversation",
+) -> models.Run:
+    run = db.query(models.Run).filter(models.Run.id == run_id).one()
+    controls = _runtime_controls(run)
+    controls["pause_requested"] = False
+    controls["pause_requested_by"] = actor
+    _set_runtime_controls(run, controls)
+    transition_run_status(db, run, models.RunStatus.QUEUED, summary="Run re-queued from conversation hold.")
+    run.completed_at = None
+    run.started_at = None
+    run.worker_id = None
+    run.locked_by = None
+    run.locked_at = None
+    run.lease_expires_at = None
+    run.heartbeat_at = None
+    run.failure_reason = None
+    run.escalation_reason = None
+    run.queued_at = _utcnow()
+    db.flush()
+    return run
+
+
+def retry_runtime_run(
+    db: Session,
+    run_id: uuid.UUID,
+    *,
+    actor: str = "runtime_retry",
+) -> models.Run:
+    run = db.query(models.Run).filter(models.Run.id == run_id).one()
+    payload = RunPayloadV1.model_validate(run.prompt_payload or {})
+    cloned = payload.model_copy(update={"run_id": str(uuid.uuid4())})
+    return submit_runtime_run(db, cloned, actor=actor)
+
+
 def fail_run(
     db: Session,
     run_id: uuid.UUID,
@@ -506,6 +594,24 @@ def collect_run_artifact_descriptors(db: Session, run_id: uuid.UUID) -> list[Wor
         )
         for row in rows
     ]
+
+
+def read_run_artifact_content(db: Session, run_id: uuid.UUID, artifact_id: uuid.UUID) -> Dict[str, Any]:
+    row = db.query(models.Artifact).filter(models.Artifact.id == artifact_id, models.Artifact.run_id == run_id).one()
+    uri = str(row.storage_path or "")
+    root = _runtime_artifact_root() / str(run_id) / "artifacts"
+    file_name = uri.split(f"artifact://runs/{run_id}/", 1)[1] if uri.startswith(f"artifact://runs/{run_id}/") else ""
+    path = (root / file_name).resolve() if file_name else None
+    if path is None or not path.exists():
+        raise FileNotFoundError(uri)
+    return {
+        "artifact_id": str(row.id),
+        "artifact_type": row.kind,
+        "label": row.name,
+        "uri": uri,
+        "content_type": row.content_type,
+        "content": path.read_text(encoding="utf-8"),
+    }
 
 
 def execute_assigned_run(db: Session, run_id: uuid.UUID, *, executor=None, validation_runner=None) -> models.Run:

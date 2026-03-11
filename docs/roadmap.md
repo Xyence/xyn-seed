@@ -58,3 +58,16 @@ Broader post-Epic-E UX work:
 - Migrate additional preserved legacy non-Epic-D prompt paths onto the `PromptInterpretation` contract when those paths are modernized.
 - Revisit broader console affordances later for predictive help, suggestions, or advanced editing only after later epic priorities justify it.
 - Improve full-stack DB-backed and broader console-suite stability so future UX epics can rely on wider regression coverage.
+
+## Epic F Follow-ons
+
+Epic F is complete enough to close. The items below are explicit follow-on work, not blockers for Epic F completion.
+
+- Keep the run-control phrase list and worker mention aliases aligned with Epic D tests as additional worker types are introduced, so conversation remains the front door to the one orchestration/runtime path instead of drifting into ad hoc command handling.
+- Add and maintain a small acceptance matrix mapping conversation action families to their runtime, escalation, and execution-summary coverage points.
+- Watch for semantic drift between `ConversationAction`, `PromptInterpretation`, and runtime event summaries so conversation supervision stays machine-readable and auditable.
+
+Broader post-Epic-F work:
+- Migrate more preserved legacy prompt paths onto the conversation action seam when those paths are modernized, rather than leaving long-term mixed conversational execution semantics.
+- Revisit broader conversation ergonomics only after later execution/review epics define stronger operator workflows.
+- Improve wider DB-backed and console integration stability so future conversational supervision work can rely on broader end-to-end regression coverage.

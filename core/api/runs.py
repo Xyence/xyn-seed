@@ -8,7 +8,7 @@ from core.database import get_db
 from core import models, schemas
 from core.executor import SimpleExecutor
 from core.runtime_contract import RunPayloadV1
-from core.runtime_execution import submit_runtime_run
+from core.runtime_execution import continue_blocked_run, request_pause_run, retry_runtime_run, submit_runtime_run
 
 router = APIRouter()
 
@@ -170,6 +170,52 @@ async def cancel_run(
     db.refresh(run)
 
     return schemas.Run.from_orm_model(run)
+
+
+@router.post("/runs/{run_id}/pause", response_model=schemas.Run)
+async def pause_runtime_run(
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    run = db.query(models.Run).filter(models.Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    run = request_pause_run(db, run_id, actor="api")
+    db.commit()
+    db.refresh(run)
+    return schemas.Run.from_orm_model(run)
+
+
+@router.post("/runs/{run_id}/continue", response_model=schemas.Run)
+async def continue_runtime_run(
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    run = db.query(models.Run).filter(models.Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status != models.RunStatus.BLOCKED:
+        raise HTTPException(status_code=409, detail="Run is not blocked")
+    run = continue_blocked_run(db, run_id, actor="api")
+    db.commit()
+    db.refresh(run)
+    return schemas.Run.from_orm_model(run)
+
+
+@router.post("/runs/{run_id}/retry", response_model=schemas.Run, status_code=201)
+async def retry_run(
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db),
+):
+    run = db.query(models.Run).filter(models.Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.status not in {models.RunStatus.FAILED, models.RunStatus.BLOCKED, models.RunStatus.COMPLETED, models.RunStatus.CANCELLED}:
+        raise HTTPException(status_code=409, detail="Run is not retryable")
+    new_run = retry_runtime_run(db, run_id, actor="api_retry")
+    db.commit()
+    db.refresh(new_run)
+    return schemas.Run.from_orm_model(new_run)
 
 
 @router.get("/runs/{run_id}/steps", response_model=list[schemas.Step])

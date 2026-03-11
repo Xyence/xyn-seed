@@ -152,6 +152,27 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertEqual(failed_payload["failure_reason"], "worker_unresponsive")
         self.assertEqual(blocked_payload["escalation_reason"], "contract_ambiguity")
 
+    def test_pause_continue_and_retry_runtime_endpoints(self):
+        queued = self._run_payload(status=models.RunStatus.QUEUED)
+        pause_response = self.client.post(f"/api/v1/runs/{queued.id}/pause")
+        self.assertEqual(pause_response.status_code, 200)
+        paused_body = pause_response.json()
+        self.assertEqual(paused_body["status"], "blocked")
+        self.assertEqual(paused_body["escalation_reason"], "paused_by_user")
+
+        continue_response = self.client.post(f"/api/v1/runs/{queued.id}/continue")
+        self.assertEqual(continue_response.status_code, 200)
+        self.assertEqual(continue_response.json()["status"], "queued")
+
+        failed = self._run_payload(status=models.RunStatus.FAILED)
+        retry_response = self.client.post(f"/api/v1/runs/{failed.id}/retry")
+        self.assertEqual(retry_response.status_code, 201)
+        retry_body = retry_response.json()
+        retry_id = uuid.UUID(retry_body["id"])
+        self.run_ids.append(retry_id)
+        self.assertEqual(retry_body["status"], "queued")
+        self.assertNotEqual(retry_body["id"], str(failed.id))
+
     def test_event_stream_emits_runtime_events_with_workspace_filter_and_resume(self):
         run = self._run_payload(status=models.RunStatus.RUNNING)
         step = report_run_step(
