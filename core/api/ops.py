@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models
+from core.runtime_workers import worker_health_reason
 
 router = APIRouter()
 
@@ -79,6 +80,30 @@ async def get_worker_status(
         Worker status including active workers and their last seen times
     """
     lookback_threshold = datetime.utcnow() - timedelta(minutes=lookback_minutes)
+
+    registered_workers = db.query(models.RuntimeWorker).all()
+    if registered_workers:
+        workers = []
+        for row in registered_workers:
+            age_seconds = (datetime.utcnow() - row.last_heartbeat).total_seconds() if row.last_heartbeat else None
+            workers.append({
+                "worker_id": row.worker_id,
+                "worker_type": row.worker_type,
+                "runtime_environment": row.runtime_environment,
+                "last_seen_at": row.last_heartbeat.isoformat() if row.last_heartbeat else None,
+                "last_seen_age_seconds": age_seconds,
+                "runs_claimed": 1 if row.active_run_id else 0,
+                "current_running": 1 if row.active_run_id else 0,
+                "capabilities": list(row.capabilities_json or []),
+                "status": row.status.value.lower(),
+                "health_reason": worker_health_reason(row),
+            })
+        return {
+            "active_worker_count": len([w for w in workers if w["status"] == "idle" or w["status"] == "busy"]),
+            "stale_worker_count": len([w for w in workers if w["status"] == "offline"]),
+            "workers": workers,
+            "lookback_minutes": lookback_minutes,
+        }
 
     # Active workers (distinct locked_by values from recent runs)
     active_workers = db.query(

@@ -7,7 +7,19 @@ RUN apt-get update && apt-get install -y \
     postgresql-client \
     docker.io \
     docker-compose \
+    curl \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js and Codex CLI for Epic C runtime execution.
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get update && apt-get install -y nodejs \
+    && npm install -g @openai/codex \
+    && codex --help >/tmp/codex-help.txt \
+    && rm -rf /var/lib/apt/lists/* /root/.npm
+
+RUN git config --system --add safe.directory /workspace/xyn \
+    && git config --system --add safe.directory /workspace/xyn-platform
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .

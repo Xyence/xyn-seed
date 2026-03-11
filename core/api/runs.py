@@ -7,8 +7,22 @@ from sqlalchemy.orm import Session
 from core.database import get_db
 from core import models, schemas
 from core.executor import SimpleExecutor
+from core.runtime_contract import RunPayloadV1
+from core.runtime_execution import submit_runtime_run
 
 router = APIRouter()
+
+
+@router.post("/runtime/runs", response_model=schemas.Run, status_code=201)
+async def submit_runtime_execution_run(
+    payload: RunPayloadV1,
+    db: Session = Depends(get_db),
+):
+    """Submit a typed Epic C runtime run for deterministic worker execution."""
+    run = submit_runtime_run(db, payload, actor="runtime_submission")
+    db.commit()
+    db.refresh(run)
+    return schemas.Run.from_orm_model(run)
 
 
 @router.post("/runs", response_model=schemas.Run, status_code=201)
@@ -209,3 +223,20 @@ async def get_step(
         raise HTTPException(status_code=404, detail="Step not found")
 
     return schemas.Step.from_orm_model(step)
+
+
+@router.get("/runs/{run_id}/artifacts", response_model=list[schemas.Artifact])
+async def list_run_artifacts(
+    run_id: uuid.UUID,
+    db: Session = Depends(get_db)
+):
+    """List artifacts for a run ordered by creation time."""
+    run = db.query(models.Run).filter(models.Run.id == run_id).first()
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    artifacts = db.query(models.Artifact).filter(
+        models.Artifact.run_id == run_id
+    ).order_by(models.Artifact.created_at.asc(), models.Artifact.id.asc()).all()
+
+    return [schemas.Artifact.from_orm_model(artifact) for artifact in artifacts]

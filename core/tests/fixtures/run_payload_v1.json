@@ -1,0 +1,40 @@
+{
+  "schema_version": "v1",
+  "run_id": "run_123",
+  "work_item_id": "wi_123",
+  "worker_type": "codex_local",
+  "target": {
+    "repo": "xyn-platform",
+    "branch": "feature/runtime-workers",
+    "workspace_id": null,
+    "artifact_id": null
+  },
+  "prompt": {
+    "title": "Implement worker registration and heartbeat tracking",
+    "body": "Implement Epic C worker registration and heartbeat tracking with tests."
+  },
+  "context": {
+    "epic_id": "epic_c",
+    "attachments": [
+      {
+        "kind": "plan",
+        "uri": "artifact://plans/epic-c.md",
+        "label": "Epic C plan"
+      }
+    ],
+    "metadata": {
+      "source": "work_item"
+    }
+  },
+  "policy": {
+    "auto_continue": true,
+    "max_retries": 1,
+    "require_human_review_on_failure": true,
+    "timeout_seconds": 1800
+  },
+  "requested_outputs": [
+    "patch",
+    "log",
+    "summary"
+  ]
+}

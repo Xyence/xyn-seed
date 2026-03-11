@@ -18,11 +18,14 @@ from core.app_jobs import AppJobWorkerHandle, start_app_job_worker, stop_app_job
 from core.artifact_registry import ensure_seed_default_registry
 from core.api.artifacts import router as artifacts_router
 from core.api.drafts import router as drafts_router
+from core.api.events import router as events_router
 from core.api.jobs import router as jobs_router
 from core.api.locations import router as locations_router
+from core.api.ops import router as ops_router
 from core.api.context_packs import router as context_packs_router
 from core.api.palette import router as palette_router
 from core.api.primitives import router as primitives_router
+from core.api.runs import router as runs_router
 from core.api.workspaces import router as workspaces_router
 from core.api.artifact_refresh import router as artifact_refresh_router
 from core.palette_commands import ensure_default_palette_commands
@@ -34,6 +37,7 @@ from core.kernel_loader import load_workspace_artifacts_into_app
 from core.context_packs import ensure_runtime_context_pack_artifacts
 from core.api.artifact_registries import router as artifact_registry_router
 from core.workspaces import ensure_default_workspace
+from core.runtime_loop import RuntimeWorkerLoopHandle, start_runtime_worker_loop, stop_runtime_worker_loop
 
 
 class CorrelationIdFilter(logging.Filter):
@@ -87,9 +91,13 @@ async def _lifespan(app: FastAPI):
         db.close()
     ensure_default_agent_via_api()
     app_job_worker: AppJobWorkerHandle | None = None
+    runtime_worker_loop: RuntimeWorkerLoopHandle | None = None
     if os.getenv("XYN_APP_JOB_WORKER_ENABLED", "true").strip().lower() in {"1", "true", "yes"}:
         app_job_worker = start_app_job_worker()
         logger.info("app-intent job worker started")
+    if os.getenv("XYN_RUNTIME_WORKER_ENABLED", "true").strip().lower() in {"1", "true", "yes"}:
+        runtime_worker_loop = start_runtime_worker_loop()
+        logger.info("runtime worker loop started worker_id=%s", runtime_worker_loop.worker_id)
 
     loaded = await load_workspace_artifacts_into_app(app)
     logger.info("kernel loaded %d artifact(s)", len(loaded))
@@ -109,6 +117,7 @@ async def _lifespan(app: FastAPI):
         except Exception:
             pass
     stop_app_job_worker(app_job_worker)
+    stop_runtime_worker_loop(runtime_worker_loop)
     logger.info("shutting down xyn-seed kernel")
 
 
@@ -153,12 +162,15 @@ def create_app() -> FastAPI:
     app.include_router(artifact_registry_router)
     app.include_router(artifacts_router, prefix="/api/v1", tags=["Artifacts"])
     app.include_router(drafts_router, prefix="/api/v1", tags=["Drafts"])
+    app.include_router(events_router, prefix="/api/v1", tags=["Events"])
     app.include_router(jobs_router, prefix="/api/v1", tags=["Jobs"])
     app.include_router(locations_router, prefix="/api/v1", tags=["Locations"])
+    app.include_router(ops_router, prefix="/api/v1", tags=["Ops"])
     app.include_router(context_packs_router, prefix="/api/v1", tags=["Context Packs"])
     app.include_router(workspaces_router, prefix="/api/v1", tags=["Workspaces"])
     app.include_router(primitives_router, prefix="/api/v1", tags=["Primitives"])
     app.include_router(palette_router, prefix="/api/v1", tags=["Palette"])
+    app.include_router(runs_router, prefix="/api/v1", tags=["Runs"])
     app.include_router(artifact_refresh_router, prefix="/api/v1", tags=["Artifacts"])
 
     return app

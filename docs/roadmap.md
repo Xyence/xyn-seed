@@ -34,3 +34,13 @@ Outcomes:
 - Workspace isolation tests for palette/device flows.
 - Persistence checks across net-inventory service and database restarts.
 - Artifact refresh smoke path validation.
+
+## Epic C Follow-ons
+
+Epic C is complete enough to close. The items below are explicit follow-on work, not blockers for Epic C completion.
+
+- Bridge remaining non-codegen task types into Epic C runtime submission. Codegen `DevTask` execution now uses typed Epic C runs; release-plan, deploy-oriented, and any other remaining legacy execution-backed task types should migrate to worker-appropriate Epic C submission paths without forcing them through `codex_local` or reintroducing dual execution truth.
+- Resolve the Django test DB issue blocking automated runtime-bridge regression coverage. Investigate and fix `django.db.utils.OperationalError: cannot CREATE INDEX "xyn_orchestrator_modelconfig" because it has pending trigger events` so `xyn_orchestrator` DevTask-to-runtime bridge tests can run reliably in automation.
+- Clarify authoritative execution reference semantics in docs and code comments. Document that `runtime_run_id` and `runtime_workspace_id` are authoritative for bridged Epic C-backed `DevTask`s, while legacy `result_run` is compatibility-only for non-bridged paths.
+- Preserve and document `DevTask` idempotency and retry semantics. Active bridged runs should continue returning the existing Epic C run on repeated submission attempts, while retry after a terminal state should create a new Epic C run and update the authoritative runtime reference.
+- Review the broader `DevTask` UX after runtime migration settles. Once more task types are Epic C-backed, revisit task list/detail/operator affordances so queued, running, blocked, retry, artifact, and runtime-reference states are clearer without changing them in the current Epic C close-out.

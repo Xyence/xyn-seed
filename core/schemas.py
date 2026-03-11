@@ -91,8 +91,18 @@ class Run(BaseModel):
     created_at: datetime
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
+    heartbeat_at: Optional[datetime] = None
     actor: str
     correlation_id: str
+    work_item_id: Optional[str] = None
+    worker_type: Optional[str] = None
+    worker_id: Optional[str] = None
+    prompt_payload: Dict[str, Any] = Field(default_factory=dict)
+    execution_policy: Dict[str, Any] = Field(default_factory=dict)
+    attempt_count: int = 0
+    summary: Optional[str] = None
+    escalation_reason: Optional[str] = None
+    failure_reason: Optional[str] = None
     inputs: Dict[str, Any] = Field(default_factory=dict)
     outputs: Optional[Dict[str, Any]] = None
     error: Optional[Dict[str, Any]] = None
@@ -111,8 +121,18 @@ class Run(BaseModel):
             created_at=run.created_at,
             started_at=run.started_at,
             completed_at=run.completed_at,
+            heartbeat_at=getattr(run, "heartbeat_at", None),
             actor=run.actor,
             correlation_id=run.correlation_id,
+            work_item_id=getattr(run, "work_item_id", None),
+            worker_type=getattr(run, "worker_type", None),
+            worker_id=getattr(run, "worker_id", None),
+            prompt_payload=getattr(run, "prompt_payload", {}) or {},
+            execution_policy=getattr(run, "execution_policy", {}) or {},
+            attempt_count=getattr(run, "attempt_count", getattr(run, "attempt", 0)) or 0,
+            summary=getattr(run, "summary", None),
+            escalation_reason=getattr(run, "escalation_reason", None),
+            failure_reason=getattr(run, "failure_reason", None),
             inputs=run.inputs or {},
             outputs=run.outputs,
             error=run.error
@@ -131,7 +151,11 @@ class Step(BaseModel):
     step_id: UUID = Field(alias="id")
     run_id: UUID
     name: str
+    step_key: Optional[str] = None
+    label: Optional[str] = None
     status: str
+    summary: Optional[str] = None
+    sequence_no: int
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     logs_artifact_id: Optional[UUID] = None
@@ -150,7 +174,11 @@ class Step(BaseModel):
             id=step.id,
             run_id=step.run_id,
             name=step.name,
+            step_key=getattr(step, "step_key", None),
+            label=getattr(step, "label", None),
             status=step.status.value,
+            summary=getattr(step, "summary", None),
+            sequence_no=getattr(step, "sequence_no", step.idx),
             started_at=step.started_at,
             completed_at=step.completed_at,
             logs_artifact_id=step.logs_artifact_id,
@@ -178,6 +206,9 @@ class Artifact(BaseModel):
     workspace_id: Optional[UUID] = None
     name: str
     kind: str
+    artifact_type: str
+    uri: Optional[str] = None
+    label: Optional[str] = None
     storage_scope: str
     sync_state: str
     content_type: str
@@ -201,6 +232,9 @@ class Artifact(BaseModel):
             workspace_id=artifact.workspace_id,
             name=artifact.name,
             kind=artifact.kind,
+            artifact_type=getattr(artifact, "artifact_type", artifact.kind),
+            uri=getattr(artifact, "uri", getattr(artifact, "storage_path", None)),
+            label=getattr(artifact, "label", artifact.name),
             storage_scope=getattr(artifact, "storage_scope", "instance-local"),
             sync_state=getattr(artifact, "sync_state", "local"),
             content_type=artifact.content_type,

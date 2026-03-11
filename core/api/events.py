@@ -1,9 +1,12 @@
 """Event API endpoints"""
+import asyncio
+import json
 import uuid
 import os
 from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from core.database import get_db
@@ -12,12 +15,109 @@ from core import models, schemas
 router = APIRouter()
 
 
+def _event_matches_workspace(event: models.Event, workspace_id: Optional[str]) -> bool:
+    if not workspace_id:
+        return True
+    data = event.data if isinstance(event.data, dict) else {}
+    return str(data.get("workspace_id") or "").strip() == str(workspace_id).strip()
+
+
+def _event_matches_runtime_only(event: models.Event, runtime_only: bool) -> bool:
+    if not runtime_only:
+        return True
+    return str(event.event_name or "").startswith("run.")
+
+
+def _query_events(
+    db: Session,
+    *,
+    limit: int,
+    cursor: Optional[str] = None,
+    event_name: Optional[str] = None,
+    run_id: Optional[uuid.UUID] = None,
+    workspace_id: Optional[str] = None,
+    runtime_only: bool = False,
+):
+    query = db.query(models.Event)
+    if event_name:
+        query = query.filter(models.Event.event_name == event_name)
+    if run_id:
+        query = query.filter(models.Event.run_id == run_id)
+    query = query.order_by(models.Event.occurred_at.desc(), models.Event.id.desc())
+    if cursor:
+        try:
+            cursor_id = uuid.UUID(cursor)
+            cursor_event = db.query(models.Event).filter(models.Event.id == cursor_id).first()
+            if cursor_event:
+                query = query.filter(
+                    (models.Event.occurred_at < cursor_event.occurred_at) |
+                    ((models.Event.occurred_at == cursor_event.occurred_at) & (models.Event.id < cursor_id))
+                )
+        except ValueError:
+            pass
+    candidate_events = query.limit(max(limit * 4, limit + 1)).all()
+    events = [
+        event
+        for event in candidate_events
+        if _event_matches_workspace(event, workspace_id) and _event_matches_runtime_only(event, runtime_only)
+    ]
+    next_cursor = None
+    if len(events) > limit:
+        next_cursor = str(events[limit - 1].id)
+        events = events[:limit]
+    return events, next_cursor
+
+
+def _query_stream_events(
+    db: Session,
+    *,
+    after_event_id: Optional[str] = None,
+    since: Optional[datetime] = None,
+    event_name: Optional[str] = None,
+    run_id: Optional[uuid.UUID] = None,
+    workspace_id: Optional[str] = None,
+    runtime_only: bool = False,
+    limit: int = 100,
+):
+    query = db.query(models.Event)
+    if event_name:
+        query = query.filter(models.Event.event_name == event_name)
+    if run_id:
+        query = query.filter(models.Event.run_id == run_id)
+    if since:
+        query = query.filter(models.Event.occurred_at >= since)
+    if after_event_id:
+        try:
+            after_uuid = uuid.UUID(after_event_id)
+            anchor = db.query(models.Event).filter(models.Event.id == after_uuid).first()
+            if anchor:
+                query = query.filter(
+                    (models.Event.occurred_at > anchor.occurred_at) |
+                    ((models.Event.occurred_at == anchor.occurred_at) & (models.Event.id > after_uuid))
+                )
+        except ValueError:
+            pass
+    query = query.order_by(models.Event.occurred_at.asc(), models.Event.id.asc())
+    candidate_events = query.limit(max(limit * 4, limit)).all()
+    return [
+        event
+        for event in candidate_events
+        if _event_matches_workspace(event, workspace_id) and _event_matches_runtime_only(event, runtime_only)
+    ][:limit]
+
+
+def _serialize_sse_event(*, event_id: str, event_type: str, payload: dict) -> str:
+    return f"id: {event_id}\nevent: {event_type}\ndata: {json.dumps(payload, default=str)}\n\n"
+
+
 @router.get("/events", response_model=schemas.EventListResponse)
 async def list_events(
     limit: int = Query(50, ge=1, le=500),
     cursor: Optional[str] = None,
     event_name: Optional[str] = None,
     run_id: Optional[uuid.UUID] = None,
+    workspace_id: Optional[str] = None,
+    runtime_only: bool = False,
     db: Session = Depends(get_db)
 ):
     """List events with optional filtering and pagination.
@@ -32,45 +132,71 @@ async def list_events(
     Returns:
         List of events with optional next cursor
     """
-    query = db.query(models.Event)
-
-    # Apply filters
-    if event_name:
-        query = query.filter(models.Event.event_name == event_name)
-    if run_id:
-        query = query.filter(models.Event.run_id == run_id)
-
-    # Order by occurred_at descending, then id descending for stable ordering
-    query = query.order_by(models.Event.occurred_at.desc(), models.Event.id.desc())
-
-    # Apply cursor pagination
-    if cursor:
-        try:
-            cursor_id = uuid.UUID(cursor)
-            # Find the cursor event to get its occurred_at
-            cursor_event = db.query(models.Event).filter(models.Event.id == cursor_id).first()
-            if cursor_event:
-                # Filter to events that occurred before the cursor, or same timestamp with lower ID
-                query = query.filter(
-                    (models.Event.occurred_at < cursor_event.occurred_at) |
-                    ((models.Event.occurred_at == cursor_event.occurred_at) & (models.Event.id < cursor_id))
-                )
-        except ValueError:
-            pass  # Invalid cursor, ignore
-
-    # Fetch limit + 1 to determine if there are more results
-    events = query.limit(limit + 1).all()
-
-    # Determine next cursor
-    next_cursor = None
-    if len(events) > limit:
-        next_cursor = str(events[limit - 1].id)
-        events = events[:limit]
-
-    # Convert to schema
+    events, next_cursor = _query_events(
+        db,
+        limit=limit,
+        cursor=cursor,
+        event_name=event_name,
+        run_id=run_id,
+        workspace_id=workspace_id,
+        runtime_only=runtime_only,
+    )
     items = [schemas.Event.from_orm_model(e) for e in events]
 
     return schemas.EventListResponse(items=items, next_cursor=next_cursor)
+
+
+@router.get("/events/stream")
+async def stream_events(
+    request: Request,
+    event_name: Optional[str] = None,
+    run_id: Optional[uuid.UUID] = None,
+    workspace_id: Optional[str] = None,
+    runtime_only: bool = False,
+    since: Optional[datetime] = None,
+    last_event_id: Optional[str] = Query(None, alias="last_event_id"),
+    once: bool = False,
+    poll_interval_seconds: float = Query(1.0, ge=0.25, le=10.0),
+    db: Session = Depends(get_db),
+):
+    """Stream events from the Event ledger using SSE."""
+
+    async def event_iterator():
+        latest_event_id = last_event_id
+        while True:
+            if await request.is_disconnected():
+                break
+            db.expire_all()
+            events = _query_stream_events(
+                db,
+                after_event_id=latest_event_id,
+                since=since,
+                event_name=event_name,
+                run_id=run_id,
+                workspace_id=workspace_id,
+                runtime_only=runtime_only,
+            )
+            if not events:
+                yield ": keepalive\n\n"
+                await asyncio.sleep(poll_interval_seconds)
+                continue
+            for event in events:
+                latest_event_id = str(event.id)
+                payload = schemas.Event.from_orm_model(event).model_dump(mode="json", by_alias=True)
+                yield _serialize_sse_event(event_id=str(event.id), event_type=event.event_name, payload=payload)
+            if once:
+                break
+            await asyncio.sleep(0)
+
+    return StreamingResponse(
+        event_iterator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/events/{event_id}", response_model=schemas.Event)

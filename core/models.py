@@ -16,11 +16,13 @@ class RunStatus(str, enum.Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    BLOCKED = "blocked"
     CANCELLED = "cancelled"
 
 
 class StepStatus(str, enum.Enum):
     """Step execution status."""
+    QUEUED = "queued"
     CREATED = "created"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -42,6 +44,13 @@ class JobStatus(str, enum.Enum):
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+
+
+class RuntimeWorkerStatus(str, enum.Enum):
+    """Registered runtime worker availability."""
+    IDLE = "idle"
+    BUSY = "busy"
+    OFFLINE = "offline"
 
 
 class Event(Base):
@@ -208,12 +217,20 @@ class Run(Base):
     locked_at = Column(DateTime(timezone=True), nullable=True)
     locked_by = Column(String(255), nullable=True)  # Worker identifier
     lease_expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # For crash recovery
+    heartbeat_at = Column(DateTime(timezone=True), nullable=True, index=True)
 
     # Scheduling and priority
     run_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, index=True)  # When run becomes eligible
     priority = Column(Integer, nullable=False, default=100, index=True)  # Lower = higher priority
     attempt = Column(Integer, nullable=False, default=0)  # Retry count
     max_attempts = Column(Integer, nullable=True)  # Optional retry limit
+    work_item_id = Column(String(255), nullable=True, index=True)
+    worker_type = Column(String(255), nullable=True, index=True)
+    prompt_payload = Column(JSON, nullable=True, default=dict)
+    execution_policy = Column(JSON, nullable=True, default=dict)
+    summary = Column(Text, nullable=True)
+    escalation_reason = Column(String(255), nullable=True)
+    failure_reason = Column(String(255), nullable=True)
 
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, index=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
@@ -233,6 +250,22 @@ class Run(Base):
     parent = relationship("Run", remote_side=[id], foreign_keys=[parent_run_id])
     edges_as_parent = relationship("RunEdge", back_populates="parent", foreign_keys="RunEdge.parent_run_id")
     edges_as_child = relationship("RunEdge", back_populates="child", foreign_keys="RunEdge.child_run_id")
+
+    @property
+    def worker_id(self):
+        return self.locked_by
+
+    @worker_id.setter
+    def worker_id(self, value):
+        self.locked_by = value
+
+    @property
+    def attempt_count(self):
+        return self.attempt
+
+    @attempt_count.setter
+    def attempt_count(self, value):
+        self.attempt = value
 
 
 class RunEdge(Base):
@@ -273,6 +306,9 @@ class Step(Base):
     outputs = Column(JSON, nullable=True)
     error = Column(JSON, nullable=True)
     logs_artifact_id = Column(UUID(as_uuid=True), ForeignKey("artifacts.id"), nullable=True)
+    step_key = Column(String(255), nullable=True, index=True)
+    label = Column(String(255), nullable=True)
+    summary = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
     started_at = Column(DateTime(timezone=True), nullable=True)
     completed_at = Column(DateTime(timezone=True), nullable=True)
@@ -282,6 +318,14 @@ class Step(Base):
     artifacts = relationship("Artifact", back_populates="step", foreign_keys="Artifact.step_id")
     logs_artifact = relationship("Artifact", foreign_keys=[logs_artifact_id], post_update=True)
     events = relationship("Event", back_populates="step", foreign_keys=[Event.step_id])
+
+    @property
+    def sequence_no(self):
+        return self.idx
+
+    @sequence_no.setter
+    def sequence_no(self, value):
+        self.idx = value
 
 
 class Artifact(Base):
@@ -308,6 +352,59 @@ class Artifact(Base):
     workspace = relationship("Workspace", foreign_keys=[workspace_id])
     run = relationship("Run", back_populates="artifacts", foreign_keys=[run_id])
     step = relationship("Step", back_populates="artifacts", foreign_keys=[step_id])
+
+    @property
+    def artifact_type(self):
+        return self.kind
+
+    @artifact_type.setter
+    def artifact_type(self, value):
+        self.kind = value
+
+    @property
+    def uri(self):
+        return self.storage_path
+
+    @uri.setter
+    def uri(self, value):
+        self.storage_path = value
+
+    @property
+    def label(self):
+        return self.name
+
+    @label.setter
+    def label(self, value):
+        self.name = value
+
+    @property
+    def metadata_json(self):
+        return self.extra_metadata
+
+    @metadata_json.setter
+    def metadata_json(self, value):
+        self.extra_metadata = value
+
+
+class RuntimeWorker(Base):
+    """Persistent runtime worker registrations."""
+    __tablename__ = "runtime_workers"
+    __table_args__ = (
+        Index("ix_runtime_workers_worker_type_status", "worker_type", "status"),
+    )
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    worker_id = Column(String(255), nullable=False, unique=True, index=True)
+    worker_type = Column(String(255), nullable=False, index=True)
+    runtime_environment = Column(String(255), nullable=False)
+    status = Column(Enum(RuntimeWorkerStatus), nullable=False, default=RuntimeWorkerStatus.IDLE, index=True)
+    last_heartbeat = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, index=True)
+    capabilities_json = Column(JSON, nullable=False, default=list)
+    active_run_id = Column(UUID(as_uuid=True), ForeignKey("runs.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    active_run = relationship("Run", foreign_keys=[active_run_id])
 
 
 class WorkspaceSetting(Base):
