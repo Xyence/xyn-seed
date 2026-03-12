@@ -52,6 +52,7 @@ Epic E is complete enough to close. The items below are explicit follow-on work,
 - Clean up the broader console test harness so the remaining React `act(...)` warning noise is reduced without changing Epic E behavior.
 - Add and maintain a small acceptance matrix note mapping the three supported Epic E prompt families to their affordance coverage and backend enforcement points.
 - Watch for resolve/apply semantic drift over time by keeping `PromptInterpretation`, `execution_mode`, and clarification semantics centralized.
+- Add structured filter support for artifact and list-style prompts. Prompts like `created two days ago`, `created yesterday`, or `with status draft` currently do not flow through a canonical filter model. The proper fix is to add structured filter extraction in intent resolution, carry those filters in the canonical direct/list action envelope, apply them in backend list handlers, and add regression coverage for supported-vs-unsupported filter semantics.
 
 Broader post-Epic-E UX work:
 - Consider a future rich-input architecture if true inline token highlighting becomes worth the complexity.
