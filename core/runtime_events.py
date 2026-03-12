@@ -26,6 +26,7 @@ def _run_context(db: Session, run_id) -> Dict[str, Any]:
         "worker_type": run.worker_type,
         "status": run.status.value if getattr(run, "status", None) is not None else None,
         "workspace_id": target.get("workspace_id"),
+        "thread_id": context.get("metadata", {}).get("thread_id") if isinstance(context.get("metadata"), dict) else context.get("thread_id"),
         "artifact_id": target.get("artifact_id"),
         "repo": target.get("repo"),
         "branch": target.get("branch"),

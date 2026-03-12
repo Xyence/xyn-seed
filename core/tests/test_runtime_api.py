@@ -45,12 +45,17 @@ class RuntimeApiTests(unittest.TestCase):
         else:
             os.environ["XYN_RUNTIME_WORKER_ENABLED"] = self._prev_runtime_worker
 
-    def _run_payload(self, *, status: models.RunStatus = models.RunStatus.RUNNING) -> models.Run:
+    def _run_payload(self, *, status: models.RunStatus = models.RunStatus.RUNNING, thread_id: str = "") -> models.Run:
         payload = dict(self.fixture)
         payload["run_id"] = str(uuid.uuid4())
         payload["work_item_id"] = f"wi-{uuid.uuid4()}"
         payload["target"] = dict(payload["target"])
         payload["target"]["workspace_id"] = str(uuid.uuid4())
+        payload["context"] = dict(payload["context"])
+        metadata = dict(payload["context"].get("metadata") or {})
+        if thread_id:
+            metadata["thread_id"] = thread_id
+        payload["context"]["metadata"] = metadata
         model = RunPayloadV1.model_validate(payload)
         run = create_runtime_run(self.db, model)
         run.status = status
@@ -174,7 +179,7 @@ class RuntimeApiTests(unittest.TestCase):
         self.assertNotEqual(retry_body["id"], str(failed.id))
 
     def test_event_stream_emits_runtime_events_with_workspace_filter_and_resume(self):
-        run = self._run_payload(status=models.RunStatus.RUNNING)
+        run = self._run_payload(status=models.RunStatus.RUNNING, thread_id="thread-1")
         step = report_run_step(
             self.db,
             run_id=run.id,
@@ -205,6 +210,7 @@ class RuntimeApiTests(unittest.TestCase):
             body = "".join(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk for chunk in response.iter_text())
         self.assertIn("event: run.step.completed", body)
         self.assertIn(f"\"run_id\": \"{run.id}\"", body)
+        self.assertIn("\"thread_id\": \"thread-1\"", body)
 
         event = self.db.query(models.Event).filter(models.Event.step_id == step.id).order_by(models.Event.created_at.asc()).first()
         with self.client.stream(
