@@ -26,6 +26,9 @@ Production deployments should inject env via seed/compose and should not depend 
   - `XYN_OPENAI_API_KEY`
   - `XYN_GEMINI_API_KEY`
   - `XYN_ANTHROPIC_API_KEY`
+- Optional purpose-specific bootstrap overlays:
+  - `XYN_AI_PLANNING_PROVIDER` / `XYN_AI_PLANNING_MODEL` / `XYN_AI_PLANNING_API_KEY`
+  - `XYN_AI_CODING_PROVIDER` / `XYN_AI_CODING_MODEL` / `XYN_AI_CODING_API_KEY`
 - Secret encryption key (for encrypted credential storage fallback):
   - `XYN_SECRET_KEY` (or `XYN_CREDENTIALS_ENCRYPTION_KEY`)
 
@@ -34,6 +37,7 @@ Provider resolution:
 - If provider is unset and exactly one key is present, provider is inferred.
 - If provider is unset and multiple keys are present, startup fails fast and requires explicit provider.
 - If no keys are present, AI bootstrap is disabled and runtime remains bootable.
+- Planning/coding bootstrap overlays are optional. If any overlay field is set for a role, that role requires the full provider/model/api-key triplet.
 
 ### Database / Cache
 
