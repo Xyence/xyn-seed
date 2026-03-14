@@ -92,9 +92,12 @@ services:
       XYN_UI_BEARER_TOKEN: ${XYN_UI_BEARER_TOKEN:-}
       DATABASE_URL: postgresql://xyn:xyn_dev_password@postgres:5432/xyn
       REDIS_URL: redis://redis:6379/0
+      XYN_ARTIFACT_ROOT: /app/.xyn/artifacts
       ARTIFACT_STORE_PATH: /app/.xyn/artifacts
+      XYN_WORKSPACE_ROOT: /app/.xyn/workspace
       XYNSEED_WORKSPACE: /app/.xyn/workspace
       XYN_LOCAL_WORKSPACE_ROOT: /app/.xyn/workspace
+      XYN_WORKSPACE_RETENTION_DAYS: ${XYN_WORKSPACE_RETENTION_DAYS:-14}
       XYN_LOCAL_DEPLOYMENTS_ROOT: /app/.xyn/deployments
       XYN_CONTEXT_PACK_MANIFEST_PATH: /app/.xyn/sync/context-packs.manifest.json
       XYNSEED_CONTRACTS_ROOT: /xyn-contracts

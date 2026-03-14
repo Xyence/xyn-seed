@@ -64,7 +64,12 @@ def _safe_slug(value: str, *, default: str = "app") -> str:
 
 
 def _workspace_root() -> Path:
-    root = Path(os.getenv("XYN_LOCAL_WORKSPACE_ROOT", os.getenv("XYNSEED_WORKSPACE", default_instance_workspace_root()))).resolve()
+    root = Path(
+        os.getenv("XYN_WORKSPACE_ROOT")
+        or os.getenv("XYN_LOCAL_WORKSPACE_ROOT")
+        or os.getenv("XYNSEED_WORKSPACE")
+        or default_instance_workspace_root()
+    ).resolve()
     root.mkdir(parents=True, exist_ok=True)
     return root
 

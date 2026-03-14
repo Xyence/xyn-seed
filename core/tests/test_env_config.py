@@ -82,6 +82,22 @@ class SeedEnvConfigTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 load_seed_config()
 
+    def test_exports_managed_storage_roots_with_defaults_and_overrides(self):
+        env = self._base_env()
+        env["XYN_OPENAI_API_KEY"] = "sk-test-openai"
+        env["XYN_ARTIFACT_ROOT"] = "/srv/xyn/artifacts"
+        env["XYN_WORKSPACE_ROOT"] = "/srv/xyn/workspaces"
+        env["XYN_WORKSPACE_RETENTION_DAYS"] = "21"
+        with patch("core.env_config._load_seed_dotenv_once", return_value=None), patch.dict(os.environ, env, clear=True):
+            config = load_seed_config()
+            exported = export_runtime_env(config)
+        self.assertEqual(exported["XYN_ARTIFACT_ROOT"], "/srv/xyn/artifacts")
+        self.assertEqual(exported["ARTIFACT_STORE_PATH"], "/srv/xyn/artifacts")
+        self.assertEqual(exported["XYN_WORKSPACE_ROOT"], "/srv/xyn/workspaces")
+        self.assertEqual(exported["XYN_LOCAL_WORKSPACE_ROOT"], "/srv/xyn/workspaces")
+        self.assertEqual(exported["XYNSEED_WORKSPACE"], "/srv/xyn/workspaces")
+        self.assertEqual(exported["XYN_WORKSPACE_RETENTION_DAYS"], "21")
+
 
 if __name__ == "__main__":
     unittest.main()

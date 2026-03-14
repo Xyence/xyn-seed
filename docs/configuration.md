@@ -44,6 +44,22 @@ Provider resolution:
 - `DATABASE_URL`
 - `REDIS_URL`
 
+### Managed Storage Roots
+
+- `XYN_ARTIFACT_ROOT`
+  - canonical durable artifact root for local/runtime storage
+  - defaults to `.xyn/artifacts` in seed-owned local/dev setups
+- `XYN_WORKSPACE_ROOT`
+  - canonical managed workspace root for active coding/scratch workspaces
+  - defaults to `.xyn/workspace`
+- `XYN_WORKSPACE_RETENTION_DAYS`
+  - local retention hint for stale managed workspace cleanup eligibility
+  - default: `14`
+
+Compatibility aliases still exported for current local flows:
+- `ARTIFACT_STORE_PATH` mirrors `XYN_ARTIFACT_ROOT`
+- `XYN_LOCAL_WORKSPACE_ROOT` and `XYNSEED_WORKSPACE` mirror `XYN_WORKSPACE_ROOT`
+
 ## Compatibility Aliases (Migration Window)
 
 - `DOMAIN` -> `XYN_BASE_DOMAIN`
