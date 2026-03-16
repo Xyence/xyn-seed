@@ -63,6 +63,16 @@ def _safe_slug(value: str, *, default: str = "app") -> str:
     return collapsed or default
 
 
+def _as_bool(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _prefer_local_platform_images_for_smoke() -> bool:
+    # Local app-builder smoke runs should validate against the platform code
+    # currently running in this workspace, not a potentially stale :dev image.
+    return _as_bool(os.getenv("XYN_APP_SMOKE_PREFER_LOCAL_IMAGES", "true"))
+
+
 def _workspace_root() -> Path:
     root = Path(
         os.getenv("XYN_WORKSPACE_ROOT")
@@ -1332,6 +1342,7 @@ def _handle_provision_sibling_xyn(db: Session, job: Job, logs: list[str]) -> tup
                     workspace_slug=workspace_slug,
                     ui_host=ui_host,
                     api_host=api_host,
+                    prefer_local_images=_prefer_local_platform_images_for_smoke(),
                 )
             )
         except HTTPException as exc:

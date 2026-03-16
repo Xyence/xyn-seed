@@ -9,7 +9,14 @@ from pathlib import Path
 from unittest import mock
 
 from core import models
-from core.codex_executor import CodexExecutionError, CodexExecutionResult, CodexTimeoutError, ValidationResult, check_codex_availability
+from core.codex_executor import (
+    CliCodexExecutor,
+    CodexExecutionError,
+    CodexExecutionResult,
+    CodexTimeoutError,
+    ValidationResult,
+    check_codex_availability,
+)
 from core.database import SessionLocal
 from core.runtime_contract import RunPayloadV1
 from core.runtime_execution import create_runtime_run, dispatch_queued_run, execute_assigned_run
@@ -272,6 +279,55 @@ class CodexLocalWorkerTests(unittest.TestCase):
     def test_executor_availability_check(self):
         availability = check_codex_availability("/definitely/missing/codex")
         self.assertFalse(availability.available)
+
+    def test_cli_executor_uses_bypass_mode_when_enabled(self):
+        executor = CliCodexExecutor("/usr/bin/codex")
+        with mock.patch.dict(os.environ, {"XYN_CODEX_BYPASS_SANDBOX": "true"}, clear=False):
+            command = executor._build_exec_command(
+                repo_path=Path("/workspace/xyn-platform"),
+                summary_path=Path("/tmp/summary.txt"),
+            )
+        self.assertEqual(
+            command,
+            [
+                "/usr/bin/codex",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "exec",
+                "-C",
+                "/workspace/xyn-platform",
+                "--json",
+                "--output-last-message",
+                "/tmp/summary.txt",
+            ],
+        )
+
+    def test_cli_executor_uses_configured_sandbox_when_bypass_disabled(self):
+        executor = CliCodexExecutor("/usr/bin/codex")
+        with mock.patch.dict(
+            os.environ,
+            {"XYN_CODEX_BYPASS_SANDBOX": "", "XYN_CODEX_SANDBOX_MODE": "danger-full-access"},
+            clear=False,
+        ):
+            command = executor._build_exec_command(
+                repo_path=Path("/workspace/xyn-platform"),
+                summary_path=Path("/tmp/summary.txt"),
+            )
+        self.assertEqual(
+            command,
+            [
+                "/usr/bin/codex",
+                "-a",
+                "never",
+                "-s",
+                "danger-full-access",
+                "exec",
+                "-C",
+                "/workspace/xyn-platform",
+                "--json",
+                "--output-last-message",
+                "/tmp/summary.txt",
+            ],
+        )
 
     def test_executor_availability_bootstraps_login_from_api_key(self):
         responses = [

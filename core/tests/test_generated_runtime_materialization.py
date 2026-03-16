@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from core.app_jobs import _materialize_net_inventory_compose
+from core.app_jobs import _materialize_net_inventory_compose, _prefer_local_platform_images_for_smoke
 from core.provisioning_local import ProvisionLocalRequest, _ensure_remote_workspace, _resolve_images_for_provision
 
 
@@ -92,13 +92,56 @@ class GeneratedRuntimeMaterializationTests(unittest.TestCase):
         self.assertEqual(result["ui_image"], "public.ecr.aws/i0h0h0n4/xyn/artifacts/xyn-ui:dev")
         resolve_registry_images.assert_called_once()
 
+    @mock.patch("core.provisioning_local._docker_image_exists", return_value=True)
+    @mock.patch("core.provisioning_local._running_container_image_ref")
+    def test_provision_prefers_running_local_platform_images(self, running_container_image_ref, _docker_image_exists):
+        running_container_image_ref.side_effect = [
+            "public.ecr.aws/i0h0h0n4/xyn/artifacts/xyn-api:dev",
+            "public.ecr.aws/i0h0h0n4/xyn/artifacts/xyn-ui:dev",
+        ]
+
+        result = _resolve_images_for_provision(ProvisionLocalRequest(name="smoke", prefer_local_images=True))
+
+        self.assertEqual(result["mode"], "running_local_images")
+        self.assertEqual(result["api_image"], "public.ecr.aws/i0h0h0n4/xyn/artifacts/xyn-api:dev")
+        self.assertEqual(result["ui_image"], "public.ecr.aws/i0h0h0n4/xyn/artifacts/xyn-ui:dev")
+
     def test_provision_can_opt_into_local_images(self):
-        with mock.patch("core.provisioning_local._docker_image_exists", return_value=True):
-            result = _resolve_images_for_provision(ProvisionLocalRequest(name="smoke", prefer_local_images=True))
+        def _run(cmd, *args, **kwargs):
+            context = cmd[-1]
+            if context in {"/tmp/src/xyn-platform/services/xyn-api", "/tmp/src/xyn-platform/apps/xyn-ui"}:
+                return (0, "", "")
+            return (1, "", f"missing context: {context}")
+
+        with mock.patch("core.provisioning_local._running_container_image_ref", return_value=""):
+            with mock.patch("core.provisioning_local._run", side_effect=_run):
+                with mock.patch.dict("os.environ", {"XYN_HOST_SRC_ROOT": "/tmp/src"}, clear=False):
+                    result = _resolve_images_for_provision(ProvisionLocalRequest(name="smoke", prefer_local_images=True))
+
+        self.assertEqual(result["mode"], "local_build")
+        self.assertEqual(result["api_image"], "xyn-api")
+        self.assertEqual(result["ui_image"], "xyn-ui")
+        self.assertIn("Built local image xyn-api from /tmp/src/xyn-platform/services/xyn-api", result["operations"])
+        self.assertIn("Built local image xyn-ui from /tmp/src/xyn-platform/apps/xyn-ui", result["operations"])
+
+    @mock.patch("core.provisioning_local._docker_image_exists", return_value=True)
+    def test_provision_falls_back_to_prebuilt_local_images_when_sources_are_missing(self, _docker_image_exists):
+        with mock.patch("core.provisioning_local._running_container_image_ref", return_value=""):
+            with mock.patch.dict("os.environ", {"XYN_HOST_SRC_ROOT": "/tmp/src"}, clear=False):
+                with mock.patch("core.provisioning_local._run", return_value=(1, "", "missing context")):
+                    result = _resolve_images_for_provision(ProvisionLocalRequest(name="smoke", prefer_local_images=True))
 
         self.assertEqual(result["mode"], "prebuilt_local_images")
         self.assertEqual(result["api_image"], "xyn-api")
         self.assertEqual(result["ui_image"], "xyn-ui")
+
+    def test_app_smoke_prefers_local_platform_images_by_default(self):
+        with mock.patch.dict("os.environ", {}, clear=False):
+            self.assertTrue(_prefer_local_platform_images_for_smoke())
+
+    def test_app_smoke_can_opt_out_of_local_platform_images(self):
+        with mock.patch.dict("os.environ", {"XYN_APP_SMOKE_PREFER_LOCAL_IMAGES": "false"}, clear=False):
+            self.assertFalse(_prefer_local_platform_images_for_smoke())
 
 
 if __name__ == "__main__":
