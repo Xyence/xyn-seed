@@ -137,7 +137,10 @@ class CodexLocalWorkerTests(unittest.TestCase):
         run = create_runtime_run(self.db, payload)
         run.priority = -1000
         self.run_ids.append(run.id)
-        worker = register_codex_local_worker(self.db, worker_id=f"codex-test-{uuid.uuid4()}")
+        with mock.patch("core.codex_local_worker.check_codex_availability") as availability:
+            availability.return_value.available = True
+            availability.return_value.reason = None
+            worker = register_codex_local_worker(self.db, worker_id=f"codex-test-{uuid.uuid4()}")
         self.worker_ids.append(worker.worker_id)
         self.db.commit()
         dispatched = dispatch_queued_run(self.db)
@@ -269,6 +272,34 @@ class CodexLocalWorkerTests(unittest.TestCase):
     def test_executor_availability_check(self):
         availability = check_codex_availability("/definitely/missing/codex")
         self.assertFalse(availability.available)
+
+    def test_executor_availability_bootstraps_login_from_api_key(self):
+        responses = [
+            mock.Mock(returncode=0, stdout="Codex help", stderr=""),
+            mock.Mock(returncode=1, stdout="", stderr="Not logged in"),
+            mock.Mock(returncode=0, stdout="Logged in", stderr=""),
+            mock.Mock(returncode=0, stdout="Logged in", stderr=""),
+        ]
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test-openai"}, clear=False), mock.patch(
+            "shutil.which", return_value="/usr/bin/codex"
+        ), mock.patch("subprocess.run", side_effect=responses) as run:
+            availability = check_codex_availability("codex")
+        self.assertTrue(availability.available)
+        login_call = run.call_args_list[2]
+        self.assertEqual(login_call.args[0], ["/usr/bin/codex", "login", "--with-api-key"])
+        self.assertIn("sk-test-openai", login_call.kwargs["input"])
+
+    def test_executor_availability_requires_login_when_no_api_key_exists(self):
+        responses = [
+            mock.Mock(returncode=0, stdout="Codex help", stderr=""),
+            mock.Mock(returncode=1, stdout="", stderr="Not logged in"),
+        ]
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "", "XYN_OPENAI_API_KEY": ""}, clear=False), mock.patch(
+            "shutil.which", return_value="/usr/bin/codex"
+        ), mock.patch("subprocess.run", side_effect=responses):
+            availability = check_codex_availability("codex")
+        self.assertFalse(availability.available)
+        self.assertIn("not logged in", availability.reason)
 
     def test_worker_registration_is_offline_when_codex_missing(self):
         with mock.patch("core.codex_local_worker.check_codex_availability") as availability:

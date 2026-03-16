@@ -85,6 +85,9 @@ class CliCodexExecutor:
         with tempfile.NamedTemporaryFile("w+", suffix=".txt", delete=False) as summary_file:
             summary_path = Path(summary_file.name)
         prompt = f"{prompt_title.strip()}\n\n{prompt_body.strip()}".strip()
+        auth_error = _ensure_codex_login(self.binary)
+        if auth_error:
+            raise CodexExecutionError(auth_error)
         cmd = [
             self.binary,
             "-a",
@@ -152,7 +155,51 @@ def check_codex_availability(binary: Optional[str] = None) -> CodexAvailability:
             binary=binary_path,
             reason=output or f"codex --help exited with status {proc.returncode}",
         )
+    auth_error = _ensure_codex_login(binary_path)
+    if auth_error:
+        return CodexAvailability(available=False, binary=binary_path, reason=auth_error)
     return CodexAvailability(available=True, binary=binary_path)
+
+
+def _codex_api_key() -> str:
+    return str(os.getenv("OPENAI_API_KEY") or os.getenv("XYN_OPENAI_API_KEY") or "").strip()
+
+
+def _ensure_codex_login(binary: str) -> Optional[str]:
+    status = subprocess.run(
+        [binary, "login", "status"],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if status.returncode == 0:
+        return None
+    api_key = _codex_api_key()
+    if not api_key:
+        return "codex is not logged in and no OpenAI API key is configured for bootstrap auth"
+    login = subprocess.run(
+        [binary, "login", "--with-api-key"],
+        input=f"{api_key}\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=15,
+    )
+    if login.returncode != 0:
+        output = "\n".join(part for part in [(login.stdout or "").strip(), (login.stderr or "").strip()] if part).strip()
+        return output or "codex login bootstrap failed"
+    verify = subprocess.run(
+        [binary, "login", "status"],
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=5,
+    )
+    if verify.returncode == 0:
+        return None
+    output = "\n".join(part for part in [(verify.stdout or "").strip(), (verify.stderr or "").strip()] if part).strip()
+    return output or "codex login bootstrap did not establish an authenticated session"
 
 
 class LocalValidationRunner:
