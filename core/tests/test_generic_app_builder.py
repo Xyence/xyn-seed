@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+
+from core.app_jobs import _build_app_spec, _materialize_net_inventory_compose
+
+
+TEAM_LUNCH_POLL_PROMPT = (
+    'Build a simple internal web app called "Team Lunch Poll". Purpose: Let a small team propose lunch options, vote '
+    "on them, and mark one option as the selected choice for the day. Requirements: Core entities: "
+    "1. Poll - title - poll_date - status (draft, open, closed, selected) "
+    "2. Lunch Option - poll - name - restaurant - notes - active (yes/no) "
+    "3. Vote - poll - lunch option - voter_name - created_at "
+    "Behavior: - Users can create a poll, add lunch options, and cast votes. "
+    "Views / usability: - List all polls - View a poll with its options and vote counts. "
+    "Validation / rules: - Prevent voting on polls that are not open."
+)
+
+
+class GenericAppBuilderTests(unittest.TestCase):
+    def test_team_lunch_poll_prompt_generates_non_inventory_semantics(self):
+        workspace_id = uuid.uuid4()
+
+        spec = _build_app_spec(
+            workspace_id=workspace_id,
+            title="Team Lunch Poll",
+            raw_prompt=TEAM_LUNCH_POLL_PROMPT,
+        )
+
+        self.assertEqual(spec["app_slug"], "team-lunch-poll")
+        self.assertEqual(spec["title"], "Team Lunch Poll")
+        self.assertEqual(spec["services"][0]["name"], "team-lunch-poll-api")
+        self.assertEqual(spec["services"][1]["name"], "team-lunch-poll-db")
+        self.assertNotIn("devices", spec.get("entities") or [])
+        self.assertNotIn("locations", spec.get("entities") or [])
+        self.assertNotIn("devices_by_status", spec.get("reports") or [])
+        self.assertTrue(isinstance(spec.get("entity_contracts"), list) and spec["entity_contracts"])
+        contracts = {row["key"]: row for row in spec["entity_contracts"]}
+        self.assertEqual(set(contracts), {"polls", "lunch_options", "votes"})
+        self.assertIn("poll_id", {field["name"] for field in contracts["lunch_options"]["fields"]})
+        self.assertIn("lunch_option_id", {field["name"] for field in contracts["votes"]["fields"]})
+        lunch_option_fields = {field["name"]: field for field in contracts["lunch_options"]["fields"]}
+        self.assertEqual(lunch_option_fields["active"]["options"], ["yes", "no"])
+        vote_fields = [field["name"] for field in contracts["votes"]["fields"]]
+        self.assertEqual(vote_fields.count("created_at"), 1)
+
+    def test_generic_builder_does_not_silently_fall_back_to_inventory(self):
+        with self.assertRaisesRegex(RuntimeError, "must not silently fall back to inventory semantics"):
+            _build_app_spec(
+                workspace_id=uuid.uuid4(),
+                title="Mystery App",
+                raw_prompt="Build a useful internal application for my team.",
+            )
+
+    def test_compose_uses_generated_service_identity_for_non_inventory_apps(self):
+        spec = _build_app_spec(
+            workspace_id=uuid.uuid4(),
+            title="Team Lunch Poll",
+            raw_prompt=TEAM_LUNCH_POLL_PROMPT,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            compose_path = _materialize_net_inventory_compose(
+                app_spec=spec,
+                deployment_dir=Path(tmpdir),
+                compose_project="xyn-app-team-lunch-poll",
+            )
+            text = compose_path.read_text(encoding="utf-8")
+
+        self.assertIn("team-lunch-poll-api", text)
+        self.assertIn("team-lunch-poll-db", text)
+        self.assertIn('SERVICE_NAME: "team-lunch-poll-api"', text)
+        self.assertIn('APP_TITLE: "Team Lunch Poll"', text)
+        self.assertNotIn("net-inventory-db:", text)
+
+
+if __name__ == "__main__":
+    unittest.main()
