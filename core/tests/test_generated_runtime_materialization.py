@@ -24,6 +24,8 @@ class GeneratedRuntimeMaterializationTests(unittest.TestCase):
                 "2. Lunch Option - poll - name - restaurant - notes - active (yes/no) "
                 "3. Vote - poll - lunch option - voter_name - created_at "
                 "Behavior: - When a Lunch Option is selected for a poll, the poll status should become selected automatically. "
+                "Behavior: - Only one Lunch Option can be selected for a poll. "
+                "Behavior: - A poll in selected status must have exactly one selected Lunch Option. "
                 "Views / usability: - View a poll with its options and vote counts. "
                 "Validation / rules: - Prevent voting on polls that are not open."
             ),
@@ -87,6 +89,8 @@ class GeneratedRuntimeMaterializationTests(unittest.TestCase):
                 "2. Lunch Option - poll - name - restaurant - notes - active (yes/no) "
                 "3. Vote - poll - lunch option - voter_name - created_at "
                 "Behavior: - When a Lunch Option is selected for a poll, the poll status should become selected automatically. "
+                "Behavior: - Only one Lunch Option can be selected for a poll. "
+                "Behavior: - A poll in selected status must have exactly one selected Lunch Option. "
                 "Views / usability: - View a poll with its options and vote counts. "
                 "Validation / rules: - Prevent voting on polls that are not open."
             ),
@@ -96,6 +100,8 @@ class GeneratedRuntimeMaterializationTests(unittest.TestCase):
             app_spec=app_spec,
             raw_prompt=(
                 "Behavior: - When a Lunch Option is selected for a poll, the poll status should become selected automatically. "
+                "Behavior: - Only one Lunch Option can be selected for a poll. "
+                "Behavior: - A poll in selected status must have exactly one selected Lunch Option. "
                 "Views / usability: - View a poll with its options and vote counts. "
                 "Validation / rules: - Prevent voting on polls that are not open."
             ),
@@ -111,6 +117,8 @@ class GeneratedRuntimeMaterializationTests(unittest.TestCase):
 
         self.assertIn("GENERATED_POLICY_BUNDLE_JSON", text)
         self.assertIn("parent_status_gate", text)
+        self.assertIn("at_most_one_matching_child_per_parent", text)
+        self.assertIn("at_least_one_matching_child_per_parent", text)
         self.assertIn("related_count", text)
         self.assertIn("post_write_related_update", text)
 

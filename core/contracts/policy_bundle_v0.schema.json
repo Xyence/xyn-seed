@@ -69,6 +69,7 @@
         "validation_policies",
         "relation_constraints",
         "transition_policies",
+        "invariant_policies",
         "derived_policies",
         "trigger_policies"
       ],
@@ -82,6 +83,10 @@
           "items": {"type": "object"}
         },
         "transition_policies": {
+          "type": "array",
+          "items": {"type": "object"}
+        },
+        "invariant_policies": {
           "type": "array",
           "items": {"type": "object"}
         },

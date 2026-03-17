@@ -22,6 +22,8 @@ TEAM_LUNCH_POLL_PROMPT = (
     "3. Vote - poll - lunch option - voter_name - created_at "
     "Behavior: - Users can create a poll, add lunch options, and cast votes. "
     "- When a Lunch Option is selected for a poll, the poll status should become selected automatically. "
+    "- Only one Lunch Option can be selected for a poll. "
+    "- A poll in selected status must have exactly one selected Lunch Option. "
     "Views / usability: - List all polls - View a poll with its options and vote counts. "
     "Validation / rules: - Prevent voting on polls that are not open."
 )
@@ -121,8 +123,19 @@ class GenericAppBuilderTests(unittest.TestCase):
         self.assertIn("parent_status_gate", runtime_rules)
         self.assertIn("match_related_field", runtime_rules)
         self.assertIn("field_transition_guard", runtime_rules)
+        self.assertIn("at_most_one_matching_child_per_parent", runtime_rules)
+        self.assertIn("at_least_one_matching_child_per_parent", runtime_rules)
         self.assertIn("related_count", runtime_rules)
         self.assertIn("post_write_related_update", runtime_rules)
+        gated_invariants = [
+            entry
+            for entry in compiled
+            if str((entry.get("parameters") or {}).get("runtime_rule") or "") == "at_least_one_matching_child_per_parent"
+        ]
+        self.assertTrue(gated_invariants)
+        first_gate = gated_invariants[0]["parameters"]
+        self.assertEqual(first_gate.get("parent_state_field"), "status")
+        self.assertEqual(first_gate.get("parent_state_value"), "selected")
 
     def test_policy_aware_smoke_primes_parent_status_before_child_create(self):
         workspace_id = str(uuid.uuid4())

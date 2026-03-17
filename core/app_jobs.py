@@ -412,6 +412,7 @@ def _build_generated_policy_artifact_manifest(*, app_spec: dict[str, Any], polic
                     "validation_policies",
                     "relation_constraints",
                     "transition_policies",
+                    "invariant_policies",
                     "derived_policies",
                     "trigger_policies",
                 )
@@ -858,6 +859,8 @@ def _policy_family_from_statement(statement: str) -> str:
     lowered = str(statement or "").strip().lower()
     if any(token in lowered for token in ("vote counts", "counts per", "count per", "rollup", "aggregate", "total")):
         return "derived_policies"
+    if "selected" in lowered and any(token in lowered for token in ("exactly one", "more than one", "only one", "at most one", "at least one")):
+        return "invariant_policies"
     if any(token in lowered for token in ("does not belong", "belong to", "exactly one", "more than one", "only one")):
         return "relation_constraints"
     if any(token in lowered for token in ("automatically", "when ", "upon ", "after ")) and any(
@@ -1352,6 +1355,200 @@ def _compile_trigger_policies(
     return rows, sequence
 
 
+def _compile_parent_scoped_uniqueness_invariants(
+    *,
+    app_slug: str,
+    entity_contracts: list[dict[str, Any]],
+    sections: dict[str, list[str]],
+    start_sequence: int,
+) -> tuple[list[dict[str, Any]], int]:
+    contracts = {
+        str(contract.get("key") or "").strip(): contract
+        for contract in entity_contracts
+        if isinstance(contract, dict) and str(contract.get("key") or "").strip()
+    }
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    sequence = start_sequence
+    statements = [str(item or "").strip() for item in sections.get("behavior", []) + sections.get("validation", []) if str(item or "").strip()]
+    for statement in statements:
+        lowered = statement.lower()
+        if "selected" not in lowered or not any(token in lowered for token in ("only one", "exactly one", "more than one", "at most one")):
+            continue
+        mentions = set(_policy_statement_entity_mentions(statement, entity_contracts=entity_contracts))
+        for child_entity, child_contract in contracts.items():
+            selected_field = _contract_field(child_contract, "selected")
+            if not isinstance(selected_field, dict):
+                continue
+            relationships = child_contract.get("relationships") if isinstance(child_contract.get("relationships"), list) else []
+            for relation in relationships:
+                if not isinstance(relation, dict):
+                    continue
+                parent_entity = str(relation.get("target_entity") or "").strip()
+                parent_relation_field = str(relation.get("field") or "").strip()
+                if not parent_entity or not parent_relation_field:
+                    continue
+                if mentions and (child_entity not in mentions or parent_entity not in mentions):
+                    continue
+                invariant_key = (child_entity, parent_entity, parent_relation_field, "selected")
+                if invariant_key in seen:
+                    continue
+                seen.add(invariant_key)
+                rows.append(
+                    {
+                        "id": f"{app_slug}-{sequence:03d}",
+                        "name": f"{child_entity} selection unique within {parent_entity}",
+                        "description": statement,
+                        "family": "invariant_policies",
+                        "status": "compiled",
+                        "enforcement_stage": "runtime_enforced",
+                        "targets": {
+                            "entity_keys": [child_entity, parent_entity],
+                            "field_names": [parent_relation_field, "selected"],
+                        },
+                        "parameters": {
+                            "runtime_rule": "at_most_one_matching_child_per_parent",
+                            "entity_key": child_entity,
+                            "parent_entity": parent_entity,
+                            "parent_relation_field": parent_relation_field,
+                            "match_field": "selected",
+                            "match_value": "yes",
+                            "on_operations": ["create", "update"],
+                        },
+                        "source": {
+                            "kind": "prompt_section",
+                            "text": statement,
+                        },
+                        "explanation": {
+                            "user_summary": statement,
+                            "why_it_exists": "Derived from prompt-described single-selection invariant.",
+                        },
+                    }
+                )
+                sequence += 1
+    return rows, sequence
+
+
+def _infer_parent_state_gate_from_statement(
+    *,
+    statement: str,
+    parent_contract: dict[str, Any],
+) -> tuple[str | None, str | None]:
+    status_field, status_options = _policy_status_field(parent_contract)
+    if not status_field or not status_options:
+        return None, None
+    lowered = str(statement or "").strip().lower()
+    for option in status_options:
+        lowered_option = str(option or "").strip().lower()
+        if not lowered_option:
+            continue
+        if (
+            f"in {lowered_option} status" in lowered
+            or f"status {lowered_option}" in lowered
+            or f"status is {lowered_option}" in lowered
+            or f"status = {lowered_option}" in lowered
+        ):
+            return status_field, option
+    return None, None
+
+
+def _compile_parent_scoped_minimum_selection_invariants(
+    *,
+    app_slug: str,
+    entity_contracts: list[dict[str, Any]],
+    sections: dict[str, list[str]],
+    start_sequence: int,
+) -> tuple[list[dict[str, Any]], int]:
+    contracts = {
+        str(contract.get("key") or "").strip(): contract
+        for contract in entity_contracts
+        if isinstance(contract, dict) and str(contract.get("key") or "").strip()
+    }
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str, str]] = set()
+    sequence = start_sequence
+    statements = [str(item or "").strip() for item in sections.get("behavior", []) + sections.get("validation", []) if str(item or "").strip()]
+    for statement in statements:
+        lowered = statement.lower()
+        if "selected" not in lowered:
+            continue
+        if not any(token in lowered for token in ("exactly one", "at least one", "must have one", "must have exactly one")):
+            continue
+        mentions = set(_policy_statement_entity_mentions(statement, entity_contracts=entity_contracts))
+        for child_entity, child_contract in contracts.items():
+            selected_field = _contract_field(child_contract, "selected")
+            if not isinstance(selected_field, dict):
+                continue
+            relationships = child_contract.get("relationships") if isinstance(child_contract.get("relationships"), list) else []
+            for relation in relationships:
+                if not isinstance(relation, dict):
+                    continue
+                parent_entity = str(relation.get("target_entity") or "").strip()
+                parent_relation_field = str(relation.get("field") or "").strip()
+                if not parent_entity or not parent_relation_field:
+                    continue
+                if mentions and (child_entity not in mentions or parent_entity not in mentions):
+                    continue
+                parent_contract = contracts.get(parent_entity)
+                if not parent_contract:
+                    continue
+                parent_state_field, parent_state_value = _infer_parent_state_gate_from_statement(
+                    statement=statement,
+                    parent_contract=parent_contract,
+                )
+                invariant_key = (
+                    child_entity,
+                    parent_entity,
+                    parent_relation_field,
+                    "selected",
+                    parent_state_field or "",
+                    parent_state_value or "",
+                )
+                if invariant_key in seen:
+                    continue
+                seen.add(invariant_key)
+                parameters: dict[str, Any] = {
+                    "runtime_rule": "at_least_one_matching_child_per_parent",
+                    "entity_key": child_entity,
+                    "parent_entity": parent_entity,
+                    "parent_relation_field": parent_relation_field,
+                    "match_field": "selected",
+                    "match_value": "yes",
+                    "on_parent_operations": ["create", "update"],
+                    "on_child_operations": ["create", "update", "delete"],
+                }
+                if parent_state_field and parent_state_value:
+                    parameters["parent_state_field"] = parent_state_field
+                    parameters["parent_state_value"] = parent_state_value
+                rows.append(
+                    {
+                        "id": f"{app_slug}-{sequence:03d}",
+                        "name": f"{parent_entity} requires selected {child_entity}",
+                        "description": statement,
+                        "family": "invariant_policies",
+                        "status": "compiled",
+                        "enforcement_stage": "runtime_enforced",
+                        "targets": {
+                            "entity_keys": [parent_entity, child_entity],
+                            "field_names": _normalize_unique_strings(
+                                [parent_relation_field, "selected", parent_state_field or ""]
+                            ),
+                        },
+                        "parameters": parameters,
+                        "source": {
+                            "kind": "prompt_section",
+                            "text": statement,
+                        },
+                        "explanation": {
+                            "user_summary": statement,
+                            "why_it_exists": "Derived from prompt-described required-selection invariant.",
+                        },
+                    }
+                )
+                sequence += 1
+    return rows, sequence
+
+
 def _augment_contracts_with_inferred_selection_flags(
     *,
     raw_prompt: str,
@@ -1412,6 +1609,7 @@ def _build_policy_bundle(
         "validation_policies": [],
         "relation_constraints": [],
         "transition_policies": [],
+        "invariant_policies": [],
         "derived_policies": [],
         "trigger_policies": [],
     }
@@ -1478,6 +1676,20 @@ def _build_policy_bundle(
         start_sequence=sequence,
     )
     families["trigger_policies"].extend(compiled_trigger_policies)
+    compiled_invariant_policies, sequence = _compile_parent_scoped_uniqueness_invariants(
+        app_slug=app_slug,
+        entity_contracts=[row for row in entity_contracts if isinstance(row, dict)],
+        sections=sections,
+        start_sequence=sequence,
+    )
+    families["invariant_policies"].extend(compiled_invariant_policies)
+    compiled_minimum_invariants, sequence = _compile_parent_scoped_minimum_selection_invariants(
+        app_slug=app_slug,
+        entity_contracts=[row for row in entity_contracts if isinstance(row, dict)],
+        sections=sections,
+        start_sequence=sequence,
+    )
+    families["invariant_policies"].extend(compiled_minimum_invariants)
 
     future_capabilities = [
         "render_policy_bundle",
@@ -1506,7 +1718,7 @@ def _build_policy_bundle(
         "policies": families,
         "configurable_parameters": [],
         "explanation": {
-            "summary": "Policy bundle scaffolds business-rule intent separately from entity contracts so rendering, editing, validation, and runtime enforcement can target the same durable artifact. The current runtime slice compiles relation constraints, status-based write gates, transition guards, related-count projections, and simple post-write related updates.",
+            "summary": "Policy bundle scaffolds business-rule intent separately from entity contracts so rendering, editing, validation, and runtime enforcement can target the same durable artifact. The current runtime slice compiles relation constraints, status-based write gates, transition guards, parent-scoped selection invariants (at-most-one plus optional-gated at-least-one), related-count projections, and simple post-write related updates.",
             "coverage": {
                 "documented_policy_count": sum(len(rows) for rows in families.values()),
                 "compiled_policy_count": sum(
