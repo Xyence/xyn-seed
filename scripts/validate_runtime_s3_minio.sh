@@ -8,6 +8,7 @@ echo "[runtime-s3] Starting stack with MinIO overlay..."
 docker compose -f compose.yml -f compose.minio.yml up -d --build
 
 echo "[runtime-s3] Waiting for xyn-core health..."
+healthy=0
 for i in {1..60}; do
   if docker exec xyn-core python - <<'PY' >/dev/null 2>&1
 import urllib.request
@@ -15,10 +16,17 @@ urllib.request.urlopen("http://localhost:8000/health", timeout=3)
 print("ok")
 PY
   then
+    healthy=1
     break
   fi
   sleep 2
 done
+if [[ "$healthy" -ne 1 ]]; then
+  echo "[runtime-s3] ERROR: xyn-core did not become healthy in time."
+  docker compose -f compose.yml -f compose.minio.yml ps || true
+  docker compose -f compose.yml -f compose.minio.yml logs --tail=200 core minio minio-init postgres redis || true
+  exit 1
+fi
 
 echo "[runtime-s3] Running runtime S3 integration tests..."
 docker exec \
@@ -31,7 +39,7 @@ docker exec \
   -e XYN_RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY="${XYN_RUNTIME_ARTIFACT_S3_SECRET_ACCESS_KEY:-${XYN_MINIO_ROOT_PASSWORD:-xynminio123}}" \
   -e XYN_RUNTIME_ARTIFACT_S3_FORCE_PATH_STYLE="${XYN_RUNTIME_ARTIFACT_S3_FORCE_PATH_STYLE:-true}" \
   xyn-core \
-  python -m unittest core.tests.test_runtime_s3_minio_integration
+  python -m unittest -v core.tests.test_runtime_s3_minio_integration
 
 echo "[runtime-s3] Listing MinIO objects under configured prefix..."
 docker run --rm --network xyn_default --entrypoint /bin/sh \
