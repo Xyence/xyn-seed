@@ -10,6 +10,14 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models, schemas
+from core.access_control import (
+    CAP_ARTIFACTS_READ,
+    CAP_CAMPAIGNS_MANAGE,
+    CAP_REFRESHES_RUN,
+    CAP_SOURCES_MANAGE,
+    AccessPrincipal,
+    require_capabilities,
+)
 from core.artifact_store import get_runtime_artifact_store
 
 router = APIRouter()
@@ -29,6 +37,9 @@ async def create_artifact(
     step_id: Optional[uuid.UUID] = None,
     storage_scope: str = "instance-local",
     sync_state: str = "local",
+    principal: AccessPrincipal = Depends(
+        require_capabilities(CAP_SOURCES_MANAGE, CAP_CAMPAIGNS_MANAGE, CAP_REFRESHES_RUN, require_all=False)
+    ),
     db: Session = Depends(get_db)
 ):
     """Create and upload an artifact.
@@ -108,6 +119,7 @@ async def list_artifacts(
     kind: Optional[str] = None,
     storage_scope: Optional[str] = None,
     sync_state: Optional[str] = None,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_ARTIFACTS_READ)),
     db: Session = Depends(get_db)
 ):
     """List artifacts with optional filtering and pagination.
@@ -172,6 +184,7 @@ async def list_artifacts(
 @router.get("/artifacts/{artifact_id}", response_model=schemas.Artifact)
 async def get_artifact(
     artifact_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_ARTIFACTS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get artifact metadata.
@@ -196,6 +209,7 @@ async def get_artifact(
 @router.get("/artifacts/{artifact_id}/download")
 async def download_artifact(
     artifact_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_ARTIFACTS_READ)),
     db: Session = Depends(get_db)
 ):
     """Download artifact content.

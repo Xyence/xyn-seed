@@ -5,8 +5,9 @@ import os
 import subprocess
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from core.access_control import CAP_REFRESHES_RUN, AccessPrincipal, require_capabilities
 
 router = APIRouter()
 
@@ -29,7 +30,10 @@ def _image_exists_locally(image: str) -> bool:
 
 
 @router.post("/artifacts/refresh", response_model=dict[str, Any])
-async def refresh_artifacts(payload: ArtifactRefreshRequest):
+async def refresh_artifacts(
+    payload: ArtifactRefreshRequest,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
+):
     registry = str(os.getenv("XYN_ARTIFACT_REGISTRY", "public.ecr.aws/i0h0h0n4/xyn/artifacts")).strip().rstrip("/")
     channel = str(payload.channel or "dev").strip() or "dev"
     artifact_names = [str(item).strip() for item in (payload.artifacts or []) if str(item).strip()]

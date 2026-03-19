@@ -63,6 +63,32 @@ For FastAPI routes, use `require_capabilities(...)` where practical.
 - `GET /api/v1/access/roles` (role -> capability catalog)
 - `GET /api/v1/access/me` (effective principal view)
 
+## Capability-to-Endpoint Mapping (Current Backend)
+
+The current `xyn` repo does not yet expose dedicated DealFinder primitives like
+campaign/watch/source-connector endpoints. Enforcement is applied to the nearest
+platform surfaces in this repo:
+
+- Source/admin-like surfaces (`application_admin`):
+  - `/api/v1/artifact-registries*`
+  - `/api/v1/workspaces/{workspace_slug}/artifact-registry*`
+  - `/api/v1/artifacts/refresh`
+  - `/api/v1/releases*`
+  Required capability: `app.sources.manage` or `app.datasets.publish`/`app.refreshes.run` depending on route.
+- Run/ingest/failure read surfaces (`application_admin`, `campaign_operator`, `read_only_analyst`):
+  - `/api/v1/runs*` reads, `/api/v1/jobs*` reads, `/api/v1/events*` reads
+  - `/api/v1/ops/*`, `/api/v1/packs*` reads
+  Required capability: `app.ingest_runs.read` and/or `app.failures.read`.
+- Campaign/operator mutation-like surfaces (`application_admin`, `campaign_operator`):
+  - `/api/v1/drafts*` writes
+  - `/api/v1/locations*` writes
+  - `/api/v1/palette/commands*` writes
+  - `/api/v1/domain/sites|customers` writes
+  Required capability: `app.campaigns.manage`.
+- Read-only analyst read surfaces:
+  - `/api/v1/drafts`/`/api/v1/locations`/`/api/v1/primitives`/lifecycle reads
+  Required capability: `app.read`.
+
 ## Notes
 
 - This is intentionally a lightweight canonical shape, not a full IAM subsystem.

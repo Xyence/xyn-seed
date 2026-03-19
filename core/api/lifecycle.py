@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.database import get_db
+from core.access_control import CAP_APP_READ, AccessPrincipal, enforce_access_or_403, require_capabilities
 from core.lifecycle.definitions import supported_lifecycles
 from core.models import LifecycleTransition
 from core.workspaces import resolve_workspace_by_context, workspace_context
@@ -52,7 +53,9 @@ class LifecycleTransitionResponse(BaseModel):
 
 
 @router.get("/lifecycle/definitions")
-async def list_lifecycle_definitions() -> dict[str, list[str]]:
+async def list_lifecycle_definitions(
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_APP_READ)),
+) -> dict[str, list[str]]:
     return {"lifecycles": list(supported_lifecycles())}
 
 
@@ -63,6 +66,7 @@ async def list_lifecycle_transitions(
     object_id: Optional[str] = Query(default=None),
     lifecycle_name: Optional[str] = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_APP_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -70,6 +74,7 @@ async def list_lifecycle_transitions(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_APP_READ], workspace_id=workspace.id)
     query = db.query(LifecycleTransition).filter(LifecycleTransition.workspace_id == workspace.id)
 
     if object_type:

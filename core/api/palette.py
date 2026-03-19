@@ -11,6 +11,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.database import get_db
+from core.access_control import (
+    CAP_APP_READ,
+    CAP_CAMPAIGNS_MANAGE,
+    AccessPrincipal,
+    enforce_access_or_403,
+    require_capabilities,
+)
 from core.models import PaletteCommand
 from core.palette_commands import normalize_command_key, utc_now
 from core.palette_engine import execute_palette_prompt
@@ -103,6 +110,7 @@ def _command_exists(
 async def execute_palette(
     payload: PaletteExecuteRequest,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_APP_READ)),
     db: Session = Depends(get_db),
 ):
     try:
@@ -119,6 +127,7 @@ async def execute_palette(
 @router.get("/palette/commands", response_model=list[PaletteCommandResponse])
 async def list_palette_commands(
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_APP_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -126,6 +135,7 @@ async def list_palette_commands(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_APP_READ], workspace_id=workspace.id)
     rows = (
         db.query(PaletteCommand)
         .filter((PaletteCommand.workspace_id == workspace.id) | (PaletteCommand.workspace_id.is_(None)))
@@ -139,6 +149,7 @@ async def list_palette_commands(
 async def create_palette_command(
     payload: PaletteCommandCreateRequest,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_CAMPAIGNS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -146,6 +157,7 @@ async def create_palette_command(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE], workspace_id=workspace.id)
     command_key = normalize_command_key(payload.command_key)
     if not command_key:
         raise HTTPException(status_code=400, detail="command_key is required")
@@ -174,6 +186,7 @@ async def patch_palette_command(
     command_id: uuid.UUID,
     payload: PaletteCommandPatchRequest,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_CAMPAIGNS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -181,6 +194,7 @@ async def patch_palette_command(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE], workspace_id=workspace.id)
     row = (
         db.query(PaletteCommand)
         .filter(
@@ -219,6 +233,7 @@ async def patch_palette_command(
 async def delete_palette_command(
     command_id: uuid.UUID,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_CAMPAIGNS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -226,6 +241,7 @@ async def delete_palette_command(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE], workspace_id=workspace.id)
     row = (
         db.query(PaletteCommand)
         .filter(

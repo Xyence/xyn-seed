@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.artifact_registry import (
@@ -15,6 +15,7 @@ from core.artifact_registry import (
     upsert_registry_spec,
     validate_registry_spec,
 )
+from core.access_control import CAP_SOURCES_MANAGE, AccessPrincipal, require_capabilities
 from core.database import SessionLocal
 
 router = APIRouter(prefix="/api/v1", tags=["artifact-registries"])
@@ -38,7 +39,9 @@ class WorkspaceDefaultRegistryPayload(BaseModel):
 
 
 @router.get("/artifact-registries")
-def artifact_registries_list() -> Dict[str, Any]:
+def artifact_registries_list(
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         ensure_seed_default_registry(db)
@@ -48,7 +51,10 @@ def artifact_registries_list() -> Dict[str, Any]:
 
 
 @router.post("/artifact-registries")
-def artifact_registries_create(payload: ArtifactRegistryPayload) -> Dict[str, Any]:
+def artifact_registries_create(
+    payload: ArtifactRegistryPayload,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         spec = validate_registry_spec(payload.model_dump())
@@ -69,6 +75,7 @@ def artifact_registries_resolve(
     workspace_slug: str = Query(default="default"),
     channel: Optional[str] = Query(default=None),
     ensure_local: bool = Query(default=False),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
 ) -> Dict[str, Any]:
     db = SessionLocal()
     try:
@@ -89,7 +96,10 @@ def artifact_registries_resolve(
 
 
 @router.get("/artifact-registries/{registry_slug}")
-def artifact_registries_detail(registry_slug: str) -> Dict[str, Any]:
+def artifact_registries_detail(
+    registry_slug: str,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         ensure_seed_default_registry(db)
@@ -102,7 +112,11 @@ def artifact_registries_detail(registry_slug: str) -> Dict[str, Any]:
 
 
 @router.patch("/artifact-registries/{registry_slug}")
-def artifact_registries_update(registry_slug: str, payload: ArtifactRegistryPayload) -> Dict[str, Any]:
+def artifact_registries_update(
+    registry_slug: str,
+    payload: ArtifactRegistryPayload,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         if not get_registry_spec_by_slug(db, registry_slug):
@@ -119,7 +133,10 @@ def artifact_registries_update(registry_slug: str, payload: ArtifactRegistryPayl
 
 
 @router.delete("/artifact-registries/{registry_slug}")
-def artifact_registries_delete(registry_slug: str) -> Dict[str, Any]:
+def artifact_registries_delete(
+    registry_slug: str,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         from core.models import Artifact
@@ -142,7 +159,11 @@ def artifact_registries_delete(registry_slug: str) -> Dict[str, Any]:
 
 
 @router.post("/artifact-registries/{registry_slug}/test")
-def artifact_registries_test(registry_slug: str, channel: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+def artifact_registries_test(
+    registry_slug: str,
+    channel: Optional[str] = Query(default=None),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         result = resolve_registry_images(
@@ -165,7 +186,10 @@ def artifact_registries_test(registry_slug: str, channel: Optional[str] = Query(
 
 
 @router.get("/workspaces/{workspace_slug}/artifact-registry")
-def workspace_default_artifact_registry_get(workspace_slug: str) -> Dict[str, Any]:
+def workspace_default_artifact_registry_get(
+    workspace_slug: str,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         ensure_seed_default_registry(db)
@@ -186,7 +210,11 @@ def workspace_default_artifact_registry_get(workspace_slug: str) -> Dict[str, An
 
 
 @router.patch("/workspaces/{workspace_slug}/artifact-registry")
-def workspace_default_artifact_registry_set(workspace_slug: str, payload: WorkspaceDefaultRegistryPayload) -> Dict[str, Any]:
+def workspace_default_artifact_registry_set(
+    workspace_slug: str,
+    payload: WorkspaceDefaultRegistryPayload,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
+) -> Dict[str, Any]:
     db = SessionLocal()
     try:
         slug = set_workspace_default_registry_slug(db, workspace_slug=workspace_slug, registry_slug=payload.default_artifact_registry_slug)

@@ -220,6 +220,26 @@ def assert_access(
         raise AccessDeniedError("Principal is not scoped to the requested application")
 
 
+def enforce_access_or_403(
+    principal: AccessPrincipal,
+    *,
+    required_capabilities: Sequence[str],
+    workspace_id: Optional[uuid.UUID] = None,
+    application_slug: Optional[str] = None,
+    require_all: bool = True,
+) -> None:
+    try:
+        assert_access(
+            principal,
+            required_capabilities=required_capabilities,
+            workspace_id=workspace_id,
+            application_slug=application_slug,
+            require_all=require_all,
+        )
+    except AccessDeniedError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
 def require_capabilities(*required_capabilities: str, require_all: bool = True, application_slug: Optional[str] = None):
     """FastAPI dependency factory for capability checks."""
 

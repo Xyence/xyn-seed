@@ -7,8 +7,11 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from core.access_control import (
+    CAP_APP_READ,
     CAP_CAMPAIGNS_MANAGE,
+    CAP_INGEST_RUNS_READ,
     CAP_JURISDICTIONS_MANAGE,
+    CAP_SOURCES_MANAGE,
     ROLE_APPLICATION_ADMIN,
     ROLE_CAMPAIGN_OPERATOR,
     ROLE_READ_ONLY_ANALYST,
@@ -73,6 +76,55 @@ class AccessControlTests(unittest.TestCase):
                 required_capabilities=[CAP_CAMPAIGNS_MANAGE],
                 workspace_id=uuid.uuid4(),
             )
+
+    def test_scope_enforcement_allows_workspace_match(self):
+        workspace_id = uuid.uuid4()
+        principal = AccessPrincipal(
+            subject_id="operator",
+            roles=(ROLE_CAMPAIGN_OPERATOR,),
+            capabilities=resolve_effective_capabilities(roles=[ROLE_CAMPAIGN_OPERATOR]),
+            workspace_scope_id=workspace_id,
+        )
+        assert_access(
+            principal,
+            required_capabilities=[CAP_CAMPAIGNS_MANAGE],
+            workspace_id=workspace_id,
+        )
+
+    def test_application_admin_allowed_on_source_admin_capabilities(self):
+        principal = AccessPrincipal(
+            subject_id="admin",
+            roles=(ROLE_APPLICATION_ADMIN,),
+            capabilities=resolve_effective_capabilities(roles=[ROLE_APPLICATION_ADMIN]),
+        )
+        assert_access(principal, required_capabilities=[CAP_SOURCES_MANAGE, CAP_JURISDICTIONS_MANAGE])
+
+    def test_campaign_operator_denied_on_source_admin_capabilities(self):
+        principal = AccessPrincipal(
+            subject_id="operator",
+            roles=(ROLE_CAMPAIGN_OPERATOR,),
+            capabilities=resolve_effective_capabilities(roles=[ROLE_CAMPAIGN_OPERATOR]),
+        )
+        with self.assertRaises(AccessDeniedError):
+            assert_access(principal, required_capabilities=[CAP_SOURCES_MANAGE])
+
+    def test_campaign_operator_allowed_on_campaign_capabilities(self):
+        principal = AccessPrincipal(
+            subject_id="operator",
+            roles=(ROLE_CAMPAIGN_OPERATOR,),
+            capabilities=resolve_effective_capabilities(roles=[ROLE_CAMPAIGN_OPERATOR]),
+        )
+        assert_access(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE])
+
+    def test_analyst_allowed_on_read_surfaces_only(self):
+        principal = AccessPrincipal(
+            subject_id="analyst",
+            roles=(ROLE_READ_ONLY_ANALYST,),
+            capabilities=resolve_effective_capabilities(roles=[ROLE_READ_ONLY_ANALYST]),
+        )
+        assert_access(principal, required_capabilities=[CAP_APP_READ, CAP_INGEST_RUNS_READ])
+        with self.assertRaises(AccessDeniedError):
+            assert_access(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE])
 
     def test_dev_mode_defaults_to_application_admin_when_roles_missing(self):
         os.environ["XYN_AUTH_MODE"] = "dev"
