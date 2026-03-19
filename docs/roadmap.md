@@ -105,3 +105,9 @@ Epic H is complete enough to close. The items below are explicit follow-on work,
 - Add optional policy-driven transition hooks for notifications/escalations while preserving deterministic guard checks in the lifecycle service.
 - Add lightweight operator UI affordances for object transition history filtering and manual transition actions where safe.
 - Continue reducing `xyn/core` lifecycle compatibility code by consuming canonical lifecycle definitions/services from `xyn-platform` where runtime coupling allows.
+
+## Access Control Follow-ons
+
+- Add durable role-assignment persistence and admin management UI for `application_admin`, `campaign_operator`, and `read_only_analyst` instead of header-driven local/development claims.
+- Add fine-grained row/partition policy checks (for example jurisdiction-level scope constraints) in service/repository paths once DealFinder data partition semantics are finalized.
+- Add standardized authn claim adapters for OIDC/token modes so capability claims are resolved from identity provider or issued platform tokens, not request-header conventions.
