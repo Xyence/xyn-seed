@@ -92,3 +92,9 @@ Epic H is complete enough to close. The items below are explicit follow-on work,
 ## Rules Browser Follow-ons
 
 - Add explicit per-workspace/policy-bundle permission checks in the backend rule query path so multi-tenant visibility guarantees do not rely only on metadata and platform-admin gating.
+
+## Geospatial Primitive Follow-ons
+
+- Add CI/runtime smoke coverage that asserts PostGIS remains available/installed after compose/database image changes, so spatial primitives do not silently regress to non-PostGIS runtimes.
+- Add a small non-Django consumer example (service/repository usage from FastAPI-side code) to keep the geospatial primitive framework-neutral in practice, not just in type contracts.
+- Add optional nearest-neighbor and advanced reprojection helpers after current PostGIS-backed bbox/polygon/distance baseline is stable in operator workflows.
