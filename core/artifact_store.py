@@ -292,6 +292,47 @@ class S3ArtifactStore(ArtifactStoreBase):
         sha256_hash = hashlib.sha256(content).hexdigest() if compute_sha256 else None
         return object_key, sha256_hash
 
+    async def store_stream(self, artifact_id: UUID, stream: BinaryIO, compute_sha256: bool = True) -> tuple[str, Optional[str], int]:
+        object_key = self._object_key(artifact_id)
+        try:
+            from tempfile import NamedTemporaryFile
+        except Exception as exc:  # pragma: no cover
+            raise RuntimeError("Failed to initialize temp file for S3 upload") from exc
+
+        sha256_hasher = hashlib.sha256() if compute_sha256 else None
+        byte_length = 0
+        with NamedTemporaryFile(delete=False) as handle:
+            while True:
+                chunk = await asyncio.to_thread(stream.read, 8192)
+                if not chunk:
+                    break
+                if not isinstance(chunk, (bytes, bytearray)):
+                    chunk = bytes(chunk)
+                handle.write(chunk)
+                byte_length += len(chunk)
+                if sha256_hasher:
+                    sha256_hasher.update(chunk)
+            temp_path = handle.name
+
+        try:
+            with open(temp_path, "rb") as upload_handle:
+                put_args: dict[str, Any] = {
+                    "Bucket": self.bucket,
+                    "Key": object_key,
+                    "Body": upload_handle,
+                }
+                if self.kms_key_id:
+                    put_args["ServerSideEncryption"] = "aws:kms"
+                    put_args["SSEKMSKeyId"] = self.kms_key_id
+                self._client.put_object(**put_args)
+        finally:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+        return object_key, sha256_hasher.hexdigest() if sha256_hasher else None, byte_length
+
     def retrieve_bytes(self, *, artifact_id: UUID) -> Optional[bytes]:
         object_key = self._object_key(artifact_id)
         try:

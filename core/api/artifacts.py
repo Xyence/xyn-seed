@@ -59,14 +59,11 @@ async def create_artifact(
     # Generate artifact ID
     artifact_id = uuid.uuid4()
 
-    # Read file content
-    content = await file.read()
-
-    # Store in artifact store
-    storage_path, sha256_hash = await artifact_store.store(
+    # Store in artifact store using streaming path (avoids full-memory buffering)
+    storage_path, sha256_hash, byte_length = await artifact_store.store_stream(
         artifact_id=artifact_id,
-        content=content,
-        compute_sha256=True
+        stream=file.file,
+        compute_sha256=True,
     )
 
     # Create artifact record
@@ -78,7 +75,7 @@ async def create_artifact(
         storage_scope=str(storage_scope or "instance-local").strip() or "instance-local",
         sync_state=str(sync_state or "local").strip() or "local",
         content_type=content_type,
-        byte_length=len(content),
+        byte_length=byte_length,
         sha256=sha256_hash,
         run_id=run_id,
         step_id=step_id,
