@@ -372,6 +372,87 @@ def _compose_up(detached: bool, env: dict[str, str]) -> bool:
     return False
 
 
+def _run_compose_sql(env: dict[str, str], sql: str) -> tuple[int, str, str]:
+    cmd = [
+        "docker",
+        "compose",
+        "exec",
+        "-T",
+        "postgres",
+        "psql",
+        "-U",
+        "xyn",
+        "-d",
+        "xyn",
+        "-t",
+        "-A",
+        "-c",
+        sql,
+    ]
+    proc = subprocess.run(cmd, check=False, capture_output=True, text=True, env=env)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _ensure_postgis_ready(env: dict[str, str], *, timeout_seconds: int = 60) -> bool:
+    print_info("Ensuring PostGIS is available in local runtime database...")
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        code, stdout, _stderr = _run_compose_sql(
+            env,
+            "SELECT EXISTS (SELECT 1 FROM pg_available_extensions WHERE name='postgis');",
+        )
+        if code == 0:
+            available = str(stdout or "").strip().lower() in {"t", "true", "1"}
+            if not available:
+                print_error(
+                    "PostGIS extension is not available in the postgres container. "
+                    "Use a PostGIS-capable DB image (for example postgis/postgis:16-3.4)."
+                )
+                return False
+            break
+        time.sleep(2)
+    else:
+        print_error("Unable to reach postgres container to verify PostGIS availability.")
+        return False
+
+    code, _stdout, stderr = _run_compose_sql(env, "CREATE EXTENSION IF NOT EXISTS postgis;")
+    if code != 0:
+        print_error("Failed to enable PostGIS extension in database 'xyn'.")
+        if stderr.strip():
+            print_error(stderr.strip())
+        return False
+
+    code, stdout, stderr = _run_compose_sql(
+        env,
+        "SELECT postgis_full_version();",
+    )
+    if code != 0:
+        print_error("PostGIS extension appears unavailable after enablement attempt.")
+        if stderr.strip():
+            print_error(stderr.strip())
+        return False
+    version_text = str(stdout or "").strip()
+    if not version_text:
+        print_error("PostGIS version output was empty; database may be misconfigured.")
+        return False
+
+    code, stdout, stderr = _run_compose_sql(
+        env,
+        "SELECT ST_AsText(ST_SetSRID(ST_MakePoint(0,0),4326));",
+    )
+    if code != 0:
+        print_error("PostGIS sanity query failed (`ST_AsText(ST_SetSRID(ST_MakePoint(0,0),4326))`).")
+        if stderr.strip():
+            print_error(stderr.strip())
+        return False
+    if "POINT(0 0)" not in str(stdout or "").strip():
+        print_error("PostGIS sanity query returned unexpected result.")
+        return False
+
+    print_success("PostGIS is enabled and spatial SQL is callable.")
+    return True
+
+
 def _seed_health_candidates(seed_url: str) -> list[tuple[str, dict[str, str]]]:
     parsed = urlparse(seed_url)
     scheme = parsed.scheme or "http"
@@ -588,6 +669,8 @@ def _provision_local(
 def start(detached: bool, env: dict[str, str]) -> bool:
     print_info("Starting seed core stack...")
     if not _compose_up(detached=detached, env=env):
+        return False
+    if not _ensure_postgis_ready(env):
         return False
     seed_url = str(env.get("XYN_SEED_URL", "")).strip() or _build_default_seed_url(env)
     print_success("Seed core stack started")

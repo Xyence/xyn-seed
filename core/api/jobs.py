@@ -10,6 +10,14 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from core.database import get_db
+from core.access_control import (
+    CAP_INGEST_RUNS_READ,
+    CAP_REFRESHES_RUN,
+    AccessPrincipal,
+    enforce_access_or_403,
+    require_capabilities,
+)
+from core.lifecycle.service import LifecycleError, transition_model_status
 from core.models import Job, JobStatus
 from core.workspaces import resolve_workspace_by_context, workspace_context
 
@@ -59,6 +67,7 @@ async def list_jobs(
     limit: int = Query(50, ge=1, le=500),
     status: Optional[str] = Query(default=None),
     job_type: Optional[str] = Query(default=None, alias="type"),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -66,6 +75,7 @@ async def list_jobs(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_INGEST_RUNS_READ], workspace_id=workspace.id)
     query = db.query(Job).filter(Job.workspace_id == workspace.id)
     if status:
         norm = status.strip().lower()
@@ -82,6 +92,7 @@ async def list_jobs(
 async def get_job(
     job_id: uuid.UUID,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -89,6 +100,7 @@ async def get_job(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_INGEST_RUNS_READ], workspace_id=workspace.id)
     row = db.query(Job).filter(Job.id == job_id, Job.workspace_id == workspace.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -99,6 +111,7 @@ async def get_job(
 async def get_job_logs(
     job_id: uuid.UUID,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -106,6 +119,7 @@ async def get_job_logs(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_INGEST_RUNS_READ], workspace_id=workspace.id)
     row = db.query(Job).filter(Job.id == job_id, Job.workspace_id == workspace.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -117,6 +131,7 @@ async def patch_job(
     job_id: uuid.UUID,
     payload: JobPatchRequest,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -124,6 +139,7 @@ async def patch_job(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_REFRESHES_RUN], workspace_id=workspace.id)
     row = db.query(Job).filter(Job.id == job_id, Job.workspace_id == workspace.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -131,7 +147,18 @@ async def patch_job(
         status = str(payload.status).strip().lower()
         if status not in ALLOWED_JOB_STATUSES:
             raise HTTPException(status_code=400, detail=f"Invalid job status: {status}")
-        row.status = status
+        try:
+            transition_model_status(
+                db,
+                model_obj=row,
+                lifecycle="job",
+                object_type="job",
+                next_state=status,
+                actor="user",
+                reason="Job status updated via patch.",
+            )
+        except LifecycleError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.output_json is not None:
         row.output_json = payload.output_json
     if payload.logs_text is not None:
@@ -140,4 +167,3 @@ async def patch_job(
     db.commit()
     db.refresh(row)
     return JobResponse.from_orm_model(row)
-

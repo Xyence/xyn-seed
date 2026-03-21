@@ -6,6 +6,12 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models, schemas
+from core.access_control import (
+    CAP_INGEST_RUNS_READ,
+    CAP_REFRESHES_RUN,
+    AccessPrincipal,
+    require_capabilities,
+)
 from core.executor import SimpleExecutor
 from core.runtime_contract import RunPayloadV1
 from core.runtime_execution import continue_blocked_run, read_run_artifact_content, request_pause_run, retry_runtime_run, submit_runtime_run
@@ -16,6 +22,7 @@ router = APIRouter()
 @router.post("/runtime/runs", response_model=schemas.Run, status_code=201)
 async def submit_runtime_execution_run(
     payload: RunPayloadV1,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db),
 ):
     """Submit a typed Epic C runtime run for deterministic worker execution."""
@@ -29,6 +36,7 @@ async def submit_runtime_execution_run(
 async def create_run(
     run_request: schemas.RunCreateRequest,
     request: Request,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db)
 ):
     """Create and optionally execute a new run.
@@ -62,6 +70,7 @@ async def list_runs(
     limit: int = Query(50, ge=1, le=500),
     cursor: Optional[str] = None,
     status: Optional[str] = None,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """List runs with optional filtering and pagination.
@@ -121,6 +130,7 @@ async def list_runs(
 @router.get("/runs/{run_id}", response_model=schemas.Run)
 async def get_run(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get a specific run by ID.
@@ -143,6 +153,7 @@ async def get_run(
 @router.post("/runs/{run_id}/cancel", response_model=schemas.Run)
 async def cancel_run(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db)
 ):
     """Cancel a running run.
@@ -175,6 +186,7 @@ async def cancel_run(
 @router.post("/runs/{run_id}/pause", response_model=schemas.Run)
 async def pause_runtime_run(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db),
 ):
     run = db.query(models.Run).filter(models.Run.id == run_id).first()
@@ -189,6 +201,7 @@ async def pause_runtime_run(
 @router.post("/runs/{run_id}/continue", response_model=schemas.Run)
 async def continue_runtime_run(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db),
 ):
     run = db.query(models.Run).filter(models.Run.id == run_id).first()
@@ -205,6 +218,7 @@ async def continue_runtime_run(
 @router.post("/runs/{run_id}/retry", response_model=schemas.Run, status_code=201)
 async def retry_run(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db),
 ):
     run = db.query(models.Run).filter(models.Run.id == run_id).first()
@@ -221,6 +235,7 @@ async def retry_run(
 @router.get("/runs/{run_id}/steps", response_model=list[schemas.Step])
 async def list_run_steps(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """List all steps for a run.
@@ -248,6 +263,7 @@ async def list_run_steps(
 async def get_step(
     run_id: uuid.UUID,
     step_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get a specific step.
@@ -274,6 +290,7 @@ async def get_step(
 @router.get("/runs/{run_id}/artifacts", response_model=list[schemas.Artifact])
 async def list_run_artifacts(
     run_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """List artifacts for a run ordered by creation time."""
@@ -292,6 +309,7 @@ async def list_run_artifacts(
 async def get_run_artifact_content(
     run_id: uuid.UUID,
     artifact_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db),
 ):
     run = db.query(models.Run).filter(models.Run.id == run_id).first()

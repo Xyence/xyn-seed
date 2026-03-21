@@ -11,6 +11,13 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models, schemas
+from core.access_control import (
+    CAP_CAMPAIGNS_MANAGE,
+    CAP_INGEST_RUNS_READ,
+    CAP_REFRESHES_RUN,
+    AccessPrincipal,
+    require_capabilities,
+)
 
 router = APIRouter()
 
@@ -118,6 +125,7 @@ async def list_events(
     run_id: Optional[uuid.UUID] = None,
     workspace_id: Optional[str] = None,
     runtime_only: bool = False,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """List events with optional filtering and pagination.
@@ -157,6 +165,7 @@ async def stream_events(
     last_event_id: Optional[str] = Query(None, alias="last_event_id"),
     once: bool = False,
     poll_interval_seconds: float = Query(1.0, ge=0.25, le=10.0),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db),
 ):
     """Stream events from the Event ledger using SSE."""
@@ -202,6 +211,7 @@ async def stream_events(
 @router.get("/events/{event_id}", response_model=schemas.Event)
 async def get_event(
     event_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get a specific event by ID.
@@ -226,6 +236,9 @@ async def get_event(
 async def emit_event(
     event_request: schemas.EmitEventRequest,
     request: Request,
+    principal: AccessPrincipal = Depends(
+        require_capabilities(CAP_REFRESHES_RUN, CAP_CAMPAIGNS_MANAGE, require_all=False)
+    ),
     db: Session = Depends(get_db)
 ):
     """Emit a new event.

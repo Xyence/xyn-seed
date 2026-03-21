@@ -88,3 +88,27 @@ Epic H is complete enough to close. The items below are explicit follow-on work,
 - Tighten activity drawer click-through into work-item panels so conversation/activity references can open the corresponding durable coordination objects more directly.
 - Evaluate later whether `DevTask` should remain the long-term durable `WorkItem` substrate or be renamed/reified more explicitly once XCO-level coordination expands.
 - Evaluate later whether `RunStep` exposure in the UI should become richer, but only after there is a demonstrated supervisory need.
+
+## Rules Browser Follow-ons
+
+- Add explicit per-workspace/policy-bundle permission checks in the backend rule query path so multi-tenant visibility guarantees do not rely only on metadata and platform-admin gating.
+
+## Geospatial Primitive Follow-ons
+
+- Add CI/runtime smoke coverage that asserts PostGIS remains available/installed after compose/database image changes, so spatial primitives do not silently regress to non-PostGIS runtimes.
+- Add a small non-Django consumer example (service/repository usage from FastAPI-side code) to keep the geospatial primitive framework-neutral in practice, not just in type contracts.
+- Add optional nearest-neighbor and advanced reprojection helpers after current PostGIS-backed bbox/polygon/distance baseline is stable in operator workflows.
+
+## Lifecycle Primitive Follow-ons
+
+- Integrate additional lifecycle-heavy models (for example pack installations and connector-like objects) onto the shared lifecycle service instead of ad hoc status writes.
+- Add optional policy-driven transition hooks for notifications/escalations while preserving deterministic guard checks in the lifecycle service.
+- Add lightweight operator UI affordances for object transition history filtering and manual transition actions where safe.
+- Continue reducing `xyn/core` lifecycle compatibility code by consuming canonical lifecycle definitions/services from `xyn-platform` where runtime coupling allows.
+
+## Access Control Follow-ons
+
+- Add durable role-assignment persistence and admin management UI for `application_admin`, `campaign_operator`, and `read_only_analyst` instead of header-driven local/development claims.
+- Add fine-grained row/partition policy checks (for example jurisdiction-level scope constraints) in service/repository paths once DealFinder data partition semantics are finalized.
+- Add standardized authn claim adapters for OIDC/token modes so capability claims are resolved from identity provider or issued platform tokens, not request-header conventions.
+- Keep `xyn/core` access-control usage compatibility-only and defer canonical DealFinder-era role/capability evolution to `xyn-platform` (`xyn_orchestrator.app_authorization`).

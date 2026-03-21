@@ -12,6 +12,13 @@ from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from core.database import get_db
+from core.access_control import (
+    CAP_APP_READ,
+    CAP_CAMPAIGNS_MANAGE,
+    AccessPrincipal,
+    enforce_access_or_403,
+    require_capabilities,
+)
 from core.models import Location
 from core.workspaces import resolve_workspace_by_context, workspace_context
 
@@ -132,6 +139,7 @@ async def list_locations(
     kind: Optional[str] = Query(default=None),
     q: Optional[str] = Query(default=None),
     limit: int = Query(100, ge=1, le=500),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_APP_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -139,6 +147,7 @@ async def list_locations(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_APP_READ], workspace_id=workspace.id)
     query = db.query(Location).filter(Location.workspace_id == workspace.id)
     if kind:
         query = query.filter(Location.kind == _normalize_kind(kind))
@@ -164,6 +173,7 @@ async def list_locations(
 async def create_location(
     payload: LocationCreateRequest,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_CAMPAIGNS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -171,6 +181,7 @@ async def create_location(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE], workspace_id=workspace.id)
     if payload.workspace_id and payload.workspace_id != workspace.id:
         raise HTTPException(status_code=403, detail="workspace_id does not match active workspace context")
 
@@ -203,6 +214,7 @@ async def create_location(
 async def get_location(
     location_id: uuid.UUID,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_APP_READ)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -210,6 +222,7 @@ async def get_location(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_APP_READ], workspace_id=workspace.id)
     row = db.query(Location).filter(Location.id == location_id, Location.workspace_id == workspace.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Location not found")
@@ -221,6 +234,7 @@ async def patch_location(
     location_id: uuid.UUID,
     payload: LocationPatchRequest,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_CAMPAIGNS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -228,6 +242,7 @@ async def patch_location(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE], workspace_id=workspace.id)
     row = db.query(Location).filter(Location.id == location_id, Location.workspace_id == workspace.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Location not found")
@@ -277,6 +292,7 @@ async def patch_location(
 async def delete_location(
     location_id: uuid.UUID,
     ctx: dict = Depends(workspace_context),
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_CAMPAIGNS_MANAGE)),
     db: Session = Depends(get_db),
 ):
     workspace = resolve_workspace_by_context(
@@ -284,6 +300,7 @@ async def delete_location(
         workspace_id=ctx.get("workspace_id"),
         workspace_slug=ctx.get("workspace_slug"),
     )
+    enforce_access_or_403(principal, required_capabilities=[CAP_CAMPAIGNS_MANAGE], workspace_id=workspace.id)
     row = db.query(Location).filter(Location.id == location_id, Location.workspace_id == workspace.id).first()
     if not row:
         raise HTTPException(status_code=404, detail="Location not found")

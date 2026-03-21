@@ -1,4 +1,6 @@
 """Artifact API endpoints"""
+import datetime
+import os
 import uuid
 from typing import Optional
 from fastapi import APIRouter, Depends, Query, HTTPException, UploadFile, File
@@ -8,6 +10,14 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models, schemas
+from core.access_control import (
+    CAP_ARTIFACTS_READ,
+    CAP_CAMPAIGNS_MANAGE,
+    CAP_REFRESHES_RUN,
+    CAP_SOURCES_MANAGE,
+    AccessPrincipal,
+    require_capabilities,
+)
 from core.artifact_store import get_runtime_artifact_store
 
 router = APIRouter()
@@ -27,6 +37,9 @@ async def create_artifact(
     step_id: Optional[uuid.UUID] = None,
     storage_scope: str = "instance-local",
     sync_state: str = "local",
+    principal: AccessPrincipal = Depends(
+        require_capabilities(CAP_SOURCES_MANAGE, CAP_CAMPAIGNS_MANAGE, CAP_REFRESHES_RUN, require_all=False)
+    ),
     db: Session = Depends(get_db)
 ):
     """Create and upload an artifact.
@@ -46,14 +59,11 @@ async def create_artifact(
     # Generate artifact ID
     artifact_id = uuid.uuid4()
 
-    # Read file content
-    content = await file.read()
-
-    # Store in artifact store
-    storage_path, sha256_hash = await artifact_store.store(
+    # Store in artifact store using streaming path (avoids full-memory buffering)
+    storage_path, sha256_hash, byte_length = await artifact_store.store_stream(
         artifact_id=artifact_id,
-        content=content,
-        compute_sha256=True
+        stream=file.file,
+        compute_sha256=True,
     )
 
     # Create artifact record
@@ -65,7 +75,7 @@ async def create_artifact(
         storage_scope=str(storage_scope or "instance-local").strip() or "instance-local",
         sync_state=str(sync_state or "local").strip() or "local",
         content_type=content_type,
-        byte_length=len(content),
+        byte_length=byte_length,
         sha256=sha256_hash,
         run_id=run_id,
         step_id=step_id,
@@ -81,7 +91,7 @@ async def create_artifact(
     # Emit artifact.created event
     event = models.Event(
         event_name="xyn.artifact.created",
-        occurred_at=models.datetime.datetime.utcnow(),
+        occurred_at=datetime.datetime.utcnow(),
         env_id=os.getenv("ENV_ID", "local-dev"),
         actor="user",
         correlation_id=str(uuid.uuid4()),
@@ -106,6 +116,7 @@ async def list_artifacts(
     kind: Optional[str] = None,
     storage_scope: Optional[str] = None,
     sync_state: Optional[str] = None,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_ARTIFACTS_READ)),
     db: Session = Depends(get_db)
 ):
     """List artifacts with optional filtering and pagination.
@@ -170,6 +181,7 @@ async def list_artifacts(
 @router.get("/artifacts/{artifact_id}", response_model=schemas.Artifact)
 async def get_artifact(
     artifact_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_ARTIFACTS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get artifact metadata.
@@ -194,6 +206,7 @@ async def get_artifact(
 @router.get("/artifacts/{artifact_id}/download")
 async def download_artifact(
     artifact_id: uuid.UUID,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_ARTIFACTS_READ)),
     db: Session = Depends(get_db)
 ):
     """Download artifact content.

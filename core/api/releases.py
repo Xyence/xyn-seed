@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Header, Response
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from jsonschema import validate, ValidationError
 from pydantic import BaseModel
 
@@ -17,10 +17,11 @@ from core.releases.compose_renderer import render_compose
 from core.releases.k8s_backend import validate_runtime_spec, K8sValidationError
 from core.releases import store
 from core.artifact_registry import apply_release_spec_artifact_resolution
+from core.access_control import CAP_DATASETS_PUBLISH, require_capabilities
 from core.database import SessionLocal
 from core import schemas
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_capabilities(CAP_DATASETS_PUBLISH))])
 
 
 def _compose_base_cmd() -> list[str]:

@@ -17,12 +17,14 @@ from core.ai_bootstrap import ensure_default_agent_via_api
 from core.app_jobs import AppJobWorkerHandle, start_app_job_worker, stop_app_job_worker
 from core.artifact_registry import ensure_seed_default_registry
 from core.api.artifacts import router as artifacts_router
+from core.api.access import router as access_router
 from core.api.drafts import router as drafts_router
 from core.api.events import router as events_router
 from core.api.jobs import router as jobs_router
 from core.api.locations import router as locations_router
 from core.api.ops import router as ops_router
 from core.api.context_packs import router as context_packs_router
+from core.api.lifecycle import router as lifecycle_router
 from core.api.palette import router as palette_router
 from core.api.primitives import router as primitives_router
 from core.api.runs import router as runs_router
@@ -160,6 +162,7 @@ def create_app() -> FastAPI:
 
     app.include_router(provisioning_router)
     app.include_router(artifact_registry_router)
+    app.include_router(access_router, prefix="/api/v1", tags=["Access"])
     app.include_router(artifacts_router, prefix="/api/v1", tags=["Artifacts"])
     app.include_router(drafts_router, prefix="/api/v1", tags=["Drafts"])
     app.include_router(events_router, prefix="/api/v1", tags=["Events"])
@@ -167,6 +170,7 @@ def create_app() -> FastAPI:
     app.include_router(locations_router, prefix="/api/v1", tags=["Locations"])
     app.include_router(ops_router, prefix="/api/v1", tags=["Ops"])
     app.include_router(context_packs_router, prefix="/api/v1", tags=["Context Packs"])
+    app.include_router(lifecycle_router, prefix="/api/v1", tags=["Lifecycle"])
     app.include_router(workspaces_router, prefix="/api/v1", tags=["Workspaces"])
     app.include_router(primitives_router, prefix="/api/v1", tags=["Primitives"])
     app.include_router(palette_router, prefix="/api/v1", tags=["Palette"])

@@ -7,13 +7,17 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models
+from core.access_control import CAP_FAILURES_READ, AccessPrincipal, require_capabilities
 from core.runtime_workers import worker_health_reason
 
 router = APIRouter()
 
 
 @router.get("/ops/queue")
-async def get_queue_status(db: Session = Depends(get_db)):
+async def get_queue_status(
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_FAILURES_READ)),
+    db: Session = Depends(get_db),
+):
     """Get queue health metrics.
 
     Returns:
@@ -69,7 +73,8 @@ async def get_queue_status(db: Session = Depends(get_db)):
 @router.get("/ops/workers")
 async def get_worker_status(
     lookback_minutes: int = Query(5, ge=1, le=60),
-    db: Session = Depends(get_db)
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_FAILURES_READ)),
+    db: Session = Depends(get_db),
 ):
     """Get worker health metrics.
 
@@ -154,7 +159,8 @@ async def get_worker_status(
 async def get_stuck_runs(
     older_than_minutes: int = Query(10, ge=1, le=1440),
     limit: int = Query(20, ge=1, le=100),
-    db: Session = Depends(get_db)
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_FAILURES_READ)),
+    db: Session = Depends(get_db),
 ):
     """Get runs that may be stuck (running too long).
 

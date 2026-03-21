@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from core.database import get_db
 from core import models, schemas
+from core.access_control import CAP_INGEST_RUNS_READ, CAP_REFRESHES_RUN, AccessPrincipal, require_capabilities
 from core.exceptions import (
     PackAlreadyInstalledError,
     PackInstallationInProgressError,
@@ -21,6 +22,7 @@ router = APIRouter()
 async def list_packs(
     limit: int = Query(50, ge=1, le=500),
     cursor: Optional[str] = None,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """List available packs with installation status.
@@ -83,6 +85,7 @@ async def list_packs(
 @router.get("/packs/{pack_ref}", response_model=schemas.Pack)
 async def get_pack(
     pack_ref: str,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get pack details by reference.
@@ -105,6 +108,7 @@ async def get_pack(
 @router.get("/packs/{pack_ref}/status", response_model=schemas.PackStatusResponse)
 async def get_pack_status(
     pack_ref: str,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_INGEST_RUNS_READ)),
     db: Session = Depends(get_db)
 ):
     """Get pack installation status.
@@ -167,6 +171,7 @@ async def install_pack(
     pack_ref: str,
     request: schemas.PackInstallRequest = schemas.PackInstallRequest(),
     background_tasks: BackgroundTasks = None,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db)
 ):
     """Enqueue a pack installation for async execution by worker.
@@ -225,6 +230,7 @@ async def install_pack(
 async def upgrade_pack(
     pack_ref: str,
     background_tasks: BackgroundTasks,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_REFRESHES_RUN)),
     db: Session = Depends(get_db)
 ):
     """Enqueue a pack upgrade for async execution by worker.

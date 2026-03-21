@@ -11,6 +11,12 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core.database import get_db
+from core.access_control import (
+    CAP_PLATFORM_ACCESS_READ,
+    CAP_SOURCES_MANAGE,
+    AccessPrincipal,
+    require_capabilities,
+)
 from core.models import Workspace
 from core.workspaces import DEFAULT_WORKSPACE_SLUG, ensure_default_workspace
 
@@ -49,6 +55,7 @@ class WorkspaceResponse(BaseModel):
 @router.get("/workspaces", response_model=list[WorkspaceResponse])
 async def list_workspaces(
     include_default: bool = True,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_PLATFORM_ACCESS_READ)),
     db: Session = Depends(get_db),
 ):
     if include_default:
@@ -60,6 +67,7 @@ async def list_workspaces(
 @router.post("/workspaces", response_model=WorkspaceResponse, status_code=201)
 async def create_workspace(
     payload: WorkspaceCreateRequest,
+    principal: AccessPrincipal = Depends(require_capabilities(CAP_SOURCES_MANAGE)),
     db: Session = Depends(get_db),
 ):
     ensure_default_workspace(db)

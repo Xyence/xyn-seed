@@ -1,3 +1,5 @@
+import asyncio
+import io
 import os
 import tempfile
 import unittest
@@ -26,7 +28,11 @@ class _FakeS3Client:
         self.objects: dict[tuple[str, str], bytes] = {}
 
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, **kwargs):
-        self.objects[(Bucket, Key)] = bytes(Body)
+        if hasattr(Body, "read"):
+            payload = Body.read()
+        else:
+            payload = Body
+        self.objects[(Bucket, Key)] = bytes(payload)
 
     def get_object(self, *, Bucket: str, Key: str):
         payload = self.objects.get((Bucket, Key))
@@ -51,6 +57,13 @@ class ArtifactStoreTests(unittest.TestCase):
             local_path = store.get_local_path(artifact_id=artifact_id)
             self.assertIsNotNone(local_path)
             self.assertTrue(Path(str(local_path)).exists())
+
+            stream_key, stream_sha, byte_length = asyncio.run(
+                store.store_stream(artifact_id=uuid.uuid4(), stream=io.BytesIO(payload), compute_sha256=True)
+            )
+            self.assertTrue(stream_key)
+            self.assertEqual(byte_length, len(payload))
+            self.assertIsNotNone(stream_sha)
 
     def test_create_runtime_store_defaults_to_local(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -91,6 +104,13 @@ class ArtifactStoreTests(unittest.TestCase):
         self.assertEqual(store.retrieve_bytes(artifact_id=artifact_id), payload)
         self.assertTrue(store.delete_artifact(artifact_id=artifact_id))
         self.assertIsNone(store.retrieve_bytes(artifact_id=artifact_id))
+
+        stream_key, stream_sha, byte_length = asyncio.run(
+            store.store_stream(artifact_id=uuid.uuid4(), stream=io.BytesIO(payload), compute_sha256=True)
+        )
+        self.assertTrue(stream_key.startswith("runtime/"))
+        self.assertEqual(byte_length, len(payload))
+        self.assertIsNotNone(stream_sha)
 
 
 if __name__ == "__main__":
