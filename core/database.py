@@ -24,6 +24,16 @@ def _is_duplicate_schema_error(exc: ProgrammingError) -> bool:
     return "already exists" in message and ("create index" in message or "create table" in message)
 
 
+def _create_tables_best_effort() -> None:
+    """Create tables individually when metadata-wide create_all races in dev/CI."""
+    for table in Base.metadata.sorted_tables:
+        try:
+            table.create(bind=engine, checkfirst=True)
+        except ProgrammingError as exc:
+            if not _is_duplicate_schema_error(exc):
+                raise
+
+
 def get_db():
     """Dependency to get database session."""
     db = SessionLocal()
@@ -53,6 +63,7 @@ def init_db():
             # table/index errors even though the target schema is already present.
             if not _is_duplicate_schema_error(exc):
                 raise
+            _create_tables_best_effort()
         _apply_dev_schema_upgrades()
         return
 
