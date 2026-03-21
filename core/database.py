@@ -1,6 +1,7 @@
 """Database configuration and session management."""
 import os
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -10,6 +11,17 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+
+def _is_duplicate_schema_error(exc: ProgrammingError) -> bool:
+    """Return True when an auto-create failure indicates pre-existing schema objects."""
+    orig = getattr(exc, "orig", None)
+    pgcode = getattr(orig, "pgcode", None)
+    if pgcode in {"42P07", "42710"}:
+        return True
+
+    message = str(exc).lower()
+    return "already exists" in message and ("create index" in message or "create table" in message)
 
 
 def get_db():
@@ -33,7 +45,14 @@ def init_db():
 
     if auto_create:
         from core import models  # noqa
-        Base.metadata.create_all(bind=engine)
+        try:
+            Base.metadata.create_all(bind=engine)
+        except ProgrammingError as exc:
+            # SQLAlchemy metadata creation can race with previous dev bootstrap
+            # attempts in ephemeral CI/dev environments, yielding duplicate
+            # table/index errors even though the target schema is already present.
+            if not _is_duplicate_schema_error(exc):
+                raise
         _apply_dev_schema_upgrades()
         return
 
